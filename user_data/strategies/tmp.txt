@@ -1,0 +1,18 @@
+    def _is_swing_high(self, row_data: DataFrame, lookback: int = 5) -> bool:
+        """Identifica un máximo local (Swing High) en la última vela."""
+        # Si no hay suficientes datos, no podemos calcularlo
+        if len(row_data) < lookback + 1:
+            return False
+        # Tomamos los últimos 'lookback' datos, excluyendo la última vela
+        # El '[:-1]' ignora la última vela, que es la que estamos evaluando
+        highs_before = row_data['high'].iloc[-(lookback+1):-1]
+        # La última vela es un máximo local si su high es mayor que los 'lookback' anteriores
+        return row_data['high'].iloc[-1] > highs_before.max()
+
+    def _is_swing_low(self, row_data: DataFrame, lookback: int = 5) -> bool:
+        """Identifica un mínimo local (Swing Low) en la última vela."""
+        if len(row_data) < lookback + 1:
+            return False
+        lows_before = row_data['low'].iloc[-(lookback+1):-1]
+        # La última vela es un mínimo local si su low es menor que los 'lookback' anteriores
+        return row_data['low'].iloc[-1] < lows_before.min()
