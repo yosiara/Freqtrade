@@ -16,3 +16,275 @@
         lows_before = row_data['low'].iloc[-(lookback+1):-1]
         # La última vela es un mínimo local si su low es menor que los 'lookback' anteriores
         return row_data['low'].iloc[-1] < lows_before.min()
+
+
+
+        # # --- 1. Detectar Swing Lows (Mínimos Significativos) ---
+        # # Condición: La vela actual es más alta que las 3 de antes y las 3 de después
+        # cond_low = (
+        #     (dataframe["low"] < dataframe["low"].shift(1)) &
+        #     (dataframe["low"] < dataframe["low"].shift(-1))
+        # )
+        # for i in range(2, half_window + 1):
+        #     cond_low &= (
+        #         (dataframe["low"] < dataframe["low"].shift(i)) &
+        #         (dataframe["low"] < dataframe["low"].shift(-i))
+        #     )
+        # dataframe["swing_low"] = cond_low.shift(half_window) # Evitar lookahead bias
+
+        # # --- 2. Detectar Swing Highs (Máximos Significativos) ---
+        # # Condición: La vela actual es más alta que las 3 de antes y las 3 de después
+        # cond_high = (
+        #     (dataframe["high"] > dataframe["high"].shift(1)) &
+        #     (dataframe["high"] > dataframe["high"].shift(-1))
+        # )
+        # for i in range(2, half_window + 1):
+        #     cond_high &= (
+        #         (dataframe["high"] > dataframe["high"].shift(i)) &
+        #         (dataframe["high"] > dataframe["high"].shift(-i))
+        #     )
+        # dataframe["swing_high"] = cond_high.shift(half_window) # Evitar lookahead bias
+
+# from datetime import datetime
+
+# # --------------------------------
+# # Add your lib to import here
+# import talib.abstract as ta
+# from pandas import DataFrame
+# from technical import qtpylib
+
+# import freqtrade.strategy
+
+
+# class BOSRetest(freqtrade.strategy.IStrategy):
+#     timeframe = "5m"
+
+#     minimal_roi = {
+#         "0": 0.10,  # 10% beneficio -> cerrar
+#         "30": 0.05,  # tras 30 min, 5%
+#         "60": 0.02,  # tras 1h, 2%
+#         "120": 0.01,  # tras 2h, 1%
+#         "240": 0,  # tras 4h, salir aunque sea break even
+#     }
+
+#     stoploss = -0.05  # -5% máximo inicial
+#     trailing_stop = True
+#     trailing_stop_positive = 0.01  # 1% de trailing una vez en ganancias
+#     trailing_stop_positive_offset = 0.02  # Se activa cuando el profit supera 2%
+#     trailing_only_offset_is_reached = True
+
+#     buy_ema_fast = freqtrade.strategy.IntParameter(5, 30, default=12, space="buy")
+#     buy_ema_slow = freqtrade.strategy.IntParameter(20, 100, default=26, space="buy")
+#     sell_ema_fast = freqtrade.strategy.IntParameter(5, 30, default=12, space="sell")
+#     sell_ema_slow = freqtrade.strategy.IntParameter(20, 100, default=26, space="sell")
+
+#     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+#         # Medias móviles exponenciales (EMA)
+#         dataframe["ema_fast"] = ta.EMA(dataframe, timeperiod=self.buy_ema_fast.value)
+#         dataframe["ema_slow"] = ta.EMA(dataframe, timeperiod=self.buy_ema_slow.value)
+#         dataframe["ema55"] = ta.EMA(dataframe, timeperiod=55)
+
+#         # EMA para venta (pueden ser iguales o distintas)
+#         dataframe["ema_fast_sell"] = ta.EMA(dataframe, timeperiod=self.sell_ema_fast.value)
+#         dataframe["ema_slow_sell"] = ta.EMA(dataframe, timeperiod=self.sell_ema_slow.value)
+
+#         # RSI
+#         dataframe["rsi"] = ta.RSI(dataframe, timeperiod=14)
+
+#         # ATR (para stop loss dinámico y tamaño de posición)
+#         dataframe["atr"] = ta.ATR(dataframe, timeperiod=14)
+
+#         # ADX para medir la fuerza de la tendencia
+#         dataframe["adx"] = ta.ADX(dataframe)
+
+#         # Break of Structure (BOS) + Retest. Higher Lows en Tendencia Alcista
+#         lookback = 5
+#         # Swing high
+#         cond_high = dataframe["high"] > dataframe["high"].shift(1)
+#         for i in range(2, lookback + 1):
+#             cond_high &= dataframe["high"] > dataframe["high"].shift(i)
+#         dataframe["swing_high"] = cond_high
+
+#         # Swing low
+#         cond_low = dataframe["low"] < dataframe["low"].shift(1)
+#         for i in range(2, lookback + 1):
+#             cond_low &= dataframe["low"] < dataframe["low"].shift(i)
+#         dataframe["swing_low"] = cond_low
+
+#         # BOS (Break of Structure) alcista
+#         dataframe["prev_high"] = dataframe["high"].where(dataframe["swing_high"]).ffill()
+#         dataframe["bos_up"] = (dataframe["swing_high"]) & (
+#             dataframe["close"] > dataframe["prev_high"].shift(1)
+#         )
+
+#         return dataframe
+
+#     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+#         # Parámetros
+#         lookback = 5  # para detectar mínimos locales
+#         confirm_candles = 2  # velas de confirmación después del mínimo
+
+#         # 1. Detectar mínimos locales (sin futuro)
+#         # Un mínimo local si el low es menor que los 'lookback' lows anteriores
+#         min_cond = (
+#             dataframe["low"]
+#             == dataframe["low"].rolling(window=lookback, min_periods=lookback).min()
+#         )
+#         # Pero rolling().min() mira solo pasado (window incluye la vela actual y anteriores). No hay futuro.
+
+#         # 2. Identificar la vela del mínimo
+#         dataframe["pullback_low"] = dataframe["low"].where(min_cond)
+
+#         # 3. Propagar hacia adelante el último mínimo conocido
+#         dataframe["last_pullback_low"] = dataframe["pullback_low"].fillna(method="ffill")
+
+#         # 4. Confirmación: después del mínimo, necesitamos 'confirm_candles' velas que cierren > ese mínimo
+#         #    Para ello, creamos una columna que indica si el cierre actual es mayor que el último mínimo
+#         dataframe["above_low"] = dataframe["close"] > dataframe["last_pullback_low"]
+
+#         # 5. Contar velas consecutivas que cumplen 'above_low' desde el mínimo
+#         #    Usamos groupby de una condición que se reinicia cuando above_low es False
+#         #    Forma sencilla: marcar la posición del mínimo y luego ver si las siguientes N velas están por encima.
+#         #    Otra forma: usar rolling con ventana de confirm_candles y comprobar que todas son True.
+#         #    Para evitar bucles, podemos hacer:
+#         dataframe["confirm"] = dataframe["above_low"].rolling(window=confirm_candles).min() == 1
+#         # Esto dice: en las últimas 'confirm_candles' velas, ¿todas han cerrado por encima del último mínimo?
+
+#         # 6. La señal de entrada se da en la vela donde se completa la confirmación
+#         #    Es decir, la vela actual es la última de las 'confirm_candles' y todas han cumplido.
+#         #    Además, no queremos entrar si ya estamos dentro de un trade (eso lo controla Freqtrade con max_open_trades)
+
+#         # Condiciones adicionales de tendencia (tus filtros)
+#         # tendencia = (dataframe['close'] > dataframe['ema200']) & (dataframe['adx'] > 25)
+
+#         entrada_pullback = (
+#             (dataframe["confirm"])
+#             & (dataframe["above_low"])  # &  # la vela actual también está por encima
+#             # (tendencia)
+#         )
+
+#         dataframe.loc[entrada_pullback, "enter_long"] = 1
+
+#         return dataframe
+
+#     # def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+#     #     # condiciones_bos = (
+#     #     #     (dataframe['bos_up'].shift(1))                            # 1. Se ha producido un BOS
+#     #     #     # & (dataframe['close'] < dataframe['high'].shift(1))       # 2. Precio retrocede por debajo del nivel
+#     #     #     # & (dataframe['close'].shift(1) > dataframe['close'])      # 3. Confirmación de vela bajista
+#     #     #     # & (dataframe['adx'] > 25)                                 # 4. Filtro de tendencia (opcional)
+#     #     #     # & (dataframe['close'] > dataframe['ema200'])              # 5. Tendencia general (opcional)
+#     #     # )
+
+#     #     # Identificamos el mínimo anterior
+#     #     dataframe['prev_swing_low'] = dataframe['low'].where(dataframe['swing_low']).ffill()
+#     #     # Un nuevo mínimo es más alto que el anterior y estamos en una tendencia alcista
+#     #     # Pullback
+#     #     condiciones_hl = (
+#     #         (dataframe['swing_low'])
+#     #         & (dataframe['low'] > dataframe['prev_swing_low'].shift(1))     # Higher Low
+#     #         # & (dataframe['close'] > dataframe['ema200'])                  # Tendencia general alcista
+#     #         # & (dataframe['adx'] > 25)
+#     #     )
+
+#     #     # condiciones = (
+#     #     #     condiciones_bos &
+#     #     #     condiciones_hl
+#     #     # )
+
+#     #     dataframe.loc[condiciones_hl, 'enter_long'] = 1
+#     #     return dataframe
+
+#     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+#         condiciones = (
+#             qtpylib.crossed_below(dataframe["ema_fast_sell"], dataframe["ema_slow_sell"])
+#             & (dataframe["volume"] > 0)
+#             # & (dataframe['adx'] < 25)
+#         )
+#         dataframe.loc[condiciones, "exit_long"] = 1
+#         return dataframe
+
+#     def custom_entry_price(
+#         self,
+#         pair: str,
+#         current_time: datetime,
+#         proposed_rate: float,
+#         entry_tag: str,
+#         side: str,
+#         **kwargs,
+#     ) -> float:
+#         """Define un precio límite para la entrada."""
+#         if entry_tag == "bos_retest":
+#             dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+#             last_candle = dataframe.iloc[-1].squeeze()
+#             # Entrar ligeramente por encima del máximo de la vela de confirmación
+#             limit_price = last_candle["high"] * 1.001
+#             return limit_price
+#         return proposed_rate  # Si no aplica, usa el precio por defecto
+
+#     # def custom_exit(self, pair: str, trade: Trade, current_time: datetime,
+#     #                 current_rate: float, current_profit: float, **kwargs) -> str:
+#     #     """
+#     #     Sube el stop loss al mínimo del último pullback, solo cuando se confirma
+#     #     que el precio ha rebotado con al menos 2 velas alcistas consecutivas.
+#     #     """
+#     #     # 1. Obtener datos históricos del par
+#     #     dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+#     #     if dataframe.empty:
+#     #         return None
+
+#     #     # 2. Filtrar velas desde que se abrió el trade
+#     #     trade_candles = dataframe.loc[dataframe.index >= trade.open_date_utc]
+#     #     if len(trade_candles) < 3:
+#     #         return None  # Necesitamos al menos 3 velas para detectar un pullback
+
+#     #     # 3. Encontrar el mínimo más bajo desde la entrada (o desde el último ajuste)
+#     #     #    Guardamos en el objeto trade el mínimo que ya usamos para el stop
+#     #     last_swing_low = getattr(trade, 'last_swing_low', None)
+#     #     if last_swing_low is None:
+#     #         # Primera vez: el mínimo es el mínimo de todas las velas hasta ahora
+#     #         last_swing_low = trade_candles['low'].min()
+#     #         trade.last_swing_low = last_swing_low
+#     #         return None
+
+#     #     # 4. Buscar un nuevo mínimo más alto que el anterior (pullback confirmado)
+#     #     #    Miramos el mínimo de las velas posteriores al último mínimo guardado
+#     #     #    Para simplificar, tomamos el mínimo de todas las velas (ya que solo subimos)
+#     #     current_low = trade_candles['low'].min()
+#     #     if current_low <= last_swing_low:
+#     #         # Aún no ha formado un mínimo más alto, seguimos esperando
+#     #         return None
+
+#     #     # 5. Tenemos un candidato a nuevo mínimo (más alto que el anterior).
+#     #     #    Ahora debemos confirmar que el precio ha rebotado y el pullback terminó.
+#     #     #    Buscamos las últimas velas desde que se alcanzó ese nuevo mínimo.
+#     #     #    Localizamos la posición de ese mínimo en el DataFrame.
+#     #     min_idx = trade_candles['low'].idxmin()  # índice del mínimo actual
+#     #     # Velas desde ese mínimo hasta el final
+#     #     after_min = trade_candles.loc[min_idx:]
+
+#     #     if len(after_min) < 3:
+#     #         return None  # No hay suficientes velas para confirmar
+
+#     #     # Confirmación: las últimas 2 velas deben cerrar por encima del mínimo candidato
+#     #     # Tomamos las dos últimas velas (la más reciente y la anterior)
+#     #     last_two = after_min.tail(2)
+#     #     if (last_two['close'] > current_low).all():
+#     #         # Confirmado: el precio ha subido dos velas seguidas por encima del mínimo
+#     #         # Subimos el stop loss a ese mínimo (con un pequeño offset para evitar ruido)
+#     #         offset = 0.001  # 0.1% por debajo del mínimo
+#     #         new_stop_price = current_low * (1 - offset)
+
+#     #         # Solo actualizamos si el nuevo stop es mejor (más alto) que el anterior
+#     #         if new_stop_price > trade.stop_loss:
+#     #             trade.stop_loss = new_stop_price
+#     #             # Guardamos este mínimo como el último usado
+#     #             trade.last_swing_low = current_low
+#     #             # Opcional: log para depuración
+#     #             # logger.info(f"Stop loss actualizado para {pair} a {new_stop_price}")
+
+#     #     # 6. Comprobar si debemos salir por stop loss
+#     #     if current_rate <= trade.stop_loss:
+#     #         return 'pullback_stop_loss'
+
+#     #     return None
