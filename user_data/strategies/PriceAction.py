@@ -39,18 +39,17 @@ class PriceAction(IStrategy):
     # can_short = True
 
     minimal_roi = {  # tiempo - beneficio -> cerrar
-        "0": 0.10,   # máximo, 10%
-        "30": 0.05,  # tras 30 min, 5%
-        "60": 0.02,  # tras 1h, 2%
-        "120": 0.01, # tras 2h, 1%
+        "0": 0.04,   # máximo, 4%
+        "120": 0.03, # tras 2h, 3%
+        "180": 0.02, # tras 3h, 2%
         "240": 0,    # tras 4h, salir aunque sea break even
     }
 
-    stoploss = -0.05                         # -5% máximo inicial
+    stoploss = -0.02                         # -2% máximo inicial
     trailing_stop = True
-    trailing_stop_positive = 0.02            # Mover SL luego de 2%
-    trailing_stop_positive_offset = 0.05     # Luego de 5% usar SL de -2%
-    # trailing_only_offset_is_reached = False  # No mover SL luego de 2%, esperar a 5%
+    trailing_stop_positive = 0.01            # Mover SL luego de 1%
+    trailing_stop_positive_offset = 0.02     # Luego de 2% usar SL de -1%
+    trailing_only_offset_is_reached = False  # No mover SL luego de 1%, esperar a 2%
     # use_custom_stoploss = False
 
     def fibonacci(self, last_swing_high_val, last_swing_low_val,
