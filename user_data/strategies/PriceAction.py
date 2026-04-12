@@ -49,7 +49,7 @@ class PriceAction(IStrategy):
     trailing_stop = True
     trailing_stop_positive = 0.01            # Mover SL luego de 1%
     trailing_stop_positive_offset = 0.02     # Luego de 2% usar SL de -1%
-    trailing_only_offset_is_reached = False  # No mover SL luego de 1%, esperar a 2%
+    trailing_only_offset_is_reached = True   # No mover SL luego de 1%, esperar a 2%
     # use_custom_stoploss = False
 
     def fibonacci(self, last_swing_high_val, last_swing_low_val,
