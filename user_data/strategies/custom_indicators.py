@@ -1,10 +1,4 @@
 # custom_indicators.py
-"""
-Indicadores técnicos personalizados para Freqtrade.
-Incluye detección de pivotes con niveles fantasma (LuxAlgo) y soportes/resistencias
-basados en volumen delta (ChartPrime), todo en una sola pasada eficiente.
-"""
-
 import numpy as np
 import pandas as pd
 import talib.abstract as ta
@@ -35,19 +29,19 @@ def pivot_sr_volume(
     pd.DataFrame
         DataFrame original con las siguientes columnas añadidas:
 
-        LuxAlgo
-        -------
+        LuxAlgo (Pivotes y ghost level)
+        -------------------------------
         - pivot_high   : Precio del pivote alto confirmado.
         - pivot_low    : Precio del pivote bajo confirmado.
         - pivot_os     : Estado del último pivote (1=alto, 0=bajo, -1=inicial).
-        - ghost_level  : Nivel fantasma horizontal actual (precio).
         - missed_high  : Precio donde se detectó un "missed pivot high".
         - missed_low   : Precio donde se detectó un "missed pivot low".
+        - ghost_level  : Nivel fantasma horizontal actual (precio).
 
         ChartPrime (S/R con volumen)
         ----------------------------
-        - sr_support    : Nivel de soporte activo (basado en pivote bajo + volumen).
-        - sr_resistance : Nivel de resistencia activo (basado en pivote alto + volumen).
+        - sr_sup        : Nivel de soporte activo (basado en pivote bajo + volumen).
+        - sr_res        : Nivel de resistencia activo (basado en pivote alto + volumen).
         - breakout_res  : Ruptura alcista de resistencia.
         - res_holds     : Resistencia rechaza el precio.
         - sup_holds     : Soporte sostiene el precio.
@@ -56,230 +50,143 @@ def pivot_sr_volume(
         - sup_is_res    : Soporte previo actúa como resistencia (cambio de rol).
     """
     df = dataframe.copy()
-    n = len(df)
 
-    # -------------------------------------------------------------------------
-    # Extraer arrays para rendimiento
-    # -------------------------------------------------------------------------
-    high = df['high'].values
-    low = df['low'].values
-    close = df['close'].values
-    open_ = df['open'].values
-    volume = df['volume'].values
-
-    # -------------------------------------------------------------------------
-    # 1. Cálculos vectorizados previos al bucle
-    # -------------------------------------------------------------------------
-    # Volumen delta: volumen en velas alcistas menos volumen en velas bajistas
-    delta_vol = np.where(close > open_, volume,
-                         np.where(close < open_, -volume, 0))
-
-    # Umbrales móviles del volumen delta
-    vol_hi = pd.Series(delta_vol).rolling(vol_len).max().values
-    vol_lo = pd.Series(delta_vol).rolling(vol_len).min().values
-
-    # ATR para el ancho de las zonas S/R (usando talib para precisión)
-    atr = ta.ATR(df, timeperiod=200).values
-    width = atr * box_width
-
-    # -------------------------------------------------------------------------
-    # 2. Detección vectorizada de pivotes (ventana centrada)
-    # -------------------------------------------------------------------------
-    half = pivot_length
-    rolling_high = pd.Series(high).rolling(window=2 * half + 1, center=True, min_periods=1)
-    rolling_low = pd.Series(low).rolling(window=2 * half + 1, center=True, min_periods=1)
-
-    # Un pivote alto es el máximo de su ventana y es único
-    is_ph = (high == rolling_high.max().values) & (
-        rolling_high.apply(lambda x: np.sum(x == np.max(x)) == 1, raw=True).values.astype(bool)
-    )
-    # Un pivote bajo es el mínimo de su ventana y es único
-    is_pl = (low == rolling_low.min().values) & (
-        rolling_low.apply(lambda x: np.sum(x == np.min(x)) == 1, raw=True).values.astype(bool)
+    # ---------------------------------------------------------------------------
+    # 1. Volumen delta
+    # ---------------------------------------------------------------------------
+    # Volumen en velas alcistas menos volumen en velas bajistas
+    df['delta_vol'] = np.where(
+        df['close'] > df['open'], df['volume'],
+        np.where(df['close'] < df['open'], -df['volume'], 0)
     )
 
-    # -------------------------------------------------------------------------
-    # 3. Bucle principal para estado LuxAlgo (máximos/mínimos rodantes y missed levels)
-    # -------------------------------------------------------------------------
-    # Arrays de salida
-    pivot_high = np.full(n, np.nan)
-    pivot_low = np.full(n, np.nan)
-    os_arr = np.full(n, -1, dtype=int)
-    ghost_level = np.full(n, np.nan)
-    missed_high = np.full(n, np.nan)
-    missed_low = np.full(n, np.nan)
+    # Umbrales móviles
+    df['vol_hi'] = df['delta_vol'].rolling(vol_len).max()
+    df['vol_lo'] = df['delta_vol'].rolling(vol_len).min()
 
-    # Variables de estado persistentes (estilo Pine Script)
-    max_val = 0.0
-    min_val = 0.0
-    max_x1 = 0
-    min_x1 = 0
-    follow_max = 0.0
-    follow_max_x1 = 0
-    follow_min = 0.0
-    follow_min_x1 = 0
-    os = 0
-    px1 = 0
-    py1 = 0.0
-    ghost = np.nan
+    # ATR para el ancho de las zonas S/R
+    df['atr'] = ta.ATR(df, timeperiod=200)
+    df['width'] = df['atr'] * box_width
 
-    # Solo evaluamos dentro del rango donde la ventana centrada tiene datos completos
-    for i in range(half, n - half):
-        lookback = i - half
-        high_lb = high[lookback]
-        low_lb = low[lookback]
+    # ---------------------------------------------------------------------------
+    # 2. Pivotes
+    # ---------------------------------------------------------------------------
+    def unique_pivots(series, length):
+        half = length
+        roll = series.rolling(window=2*half+1, center=True)
+        max_vals = roll.max()
+        min_vals = roll.min()
+        is_max = (series == max_vals)
+        is_min = (series == min_vals)
+        unique_max = roll.apply(lambda x: np.sum(x == x.max()) == 1, raw=True)
+        unique_min = roll.apply(lambda x: np.sum(x == x.min()) == 1, raw=True)
+        return is_max & unique_max, is_min & unique_min
 
-        # Actualización de máximos/mínimos rodantes (se alimentan con el precio de hace 'half' barras)
-        if high_lb > max_val:
-            max_val = high_lb
-            max_x1 = lookback
-            follow_min = low_lb
-        if low_lb < min_val:
-            min_val = low_lb
-            min_x1 = lookback
-            follow_max = high_lb
+    # Pivotes primarios
+    ph_big, pl_big = unique_pivots(df['high'], pivot_length)
+    df['ph_big'] = ph_big
+    df['pl_big'] = pl_big
 
-        if low_lb < follow_min:
-            follow_min = low_lb
-            follow_min_x1 = lookback
-        if high_lb > follow_max:
-            follow_max = high_lb
-            follow_max_x1 = lookback
+    # Estado
+    df['pivot_os'] = -1
+    df.loc[df['ph_big'], 'pivot_os'] = 1
+    df.loc[df['pl_big'], 'pivot_os'] = 0
+    df['pivot_os'] = df['pivot_os'].replace(-1, np.nan).ffill().fillna(0).astype(int)
 
-        # --- Procesar pivote alto ---
-        if is_ph[i]:
-            pivot_high[i] = high[i]
-            if os == 1:
-                missed_low[min_x1] = min_val
-                px1, py1 = min_x1, min_val
-                ghost = min_val
-            elif high[i] < max_val:
-                missed_high[max_x1] = max_val
-                missed_low[follow_min_x1] = follow_min
-                px1, py1 = max_x1, max_val
-                ghost = max_val
-                px1, py1 = follow_min_x1, follow_min
-                ghost = follow_min
+    df['pivot_high'] = np.where(df['ph_big'], df['high'], np.nan)
+    df['pivot_low']  = np.where(df['pl_big'], df['low'], np.nan)
 
-            os = 1
-            max_val = high[i]
-            min_val = high[i]
-            px1, py1 = i, high[i]
+    # Pivotes secundarios (para missed points)
+    ph_small, pl_small = unique_pivots(df['high'], pivot_length // 2)
+    df['ph_small'] = ph_small
+    df['pl_small'] = pl_small
 
-        # --- Procesar pivote bajo ---
-        if is_pl[i]:
-            pivot_low[i] = low[i]
-            if os == 0:
-                missed_high[max_x1] = max_val
-                px1, py1 = max_x1, max_val
-                ghost = max_val
-            elif low[i] > min_val:
-                missed_high[follow_max_x1] = follow_max
-                missed_low[min_x1] = min_val
-                px1, py1 = min_x1, min_val
-                ghost = min_val
-                px1, py1 = follow_max_x1, follow_max
-                ghost = follow_max
+    # ---------------------------------------------------------------------------
+    # 3. Segmentación
+    # ---------------------------------------------------------------------------
+    df['pivot_big_event'] = df['ph_big'] | df['pl_big']
+    df['segment_id'] = df['pivot_big_event'].cumsum()
 
-            os = 0
-            max_val = low[i]
-            min_val = low[i]
-            px1, py1 = i, low[i]
+    # Desplazamos los extremos del segmento anterior a la barra del nuevo pivote grande
+    df['prev_seg_max'] = df.groupby('segment_id')['high'].transform('max').shift(1)
+    df['prev_seg_min'] = df.groupby('segment_id')['low'].transform('min').shift(1)
 
-        os_arr[i] = os
-        ghost_level[i] = ghost
+    # índice donde ocurrió ese máximo anterior para colocar allí el missed level
+    df['prev_seg_max_idx'] = df.groupby('segment_id')['high'].transform('idxmax').shift(1)
+    df['prev_seg_min_idx'] = df.groupby('segment_id')['low'].transform('idxmin').shift(1)
 
-    # Proyección final: nivel fantasma no confirmado hasta el último precio
-    if px1 < n - 1:
-        if os == 1:
-            segment = low[px1 + 1:]
-            if len(segment) > 0:
-                min_idx = np.argmin(segment) + px1 + 1
-                missed_low[min_idx] = segment.min()
-        else:
-            segment = high[px1 + 1:]
-            if len(segment) > 0:
-                max_idx = np.argmax(segment) + px1 + 1
-                missed_high[max_idx] = segment.max()
+    # ---------------------------------------------------------------------------
+    # 4. Missed Levels
+    # ---------------------------------------------------------------------------
+    cond_missed_high = df['pl_big'] & (df['prev_seg_max'] > df['low'])
+    cond_missed_low  = df['ph_big'] & (df['prev_seg_min'] < df['high'])
 
-    # -------------------------------------------------------------------------
-    # 4. ChartPrime: Asignación de S/R basada en pivotes + filtro de volumen
-    # -------------------------------------------------------------------------
-    support_series = pd.Series(np.nan, index=df.index)
-    resistance_series = pd.Series(np.nan, index=df.index)
+    df['missed_high'] = np.nan
+    df['missed_low']  = np.nan
 
-    # Condiciones: pivote bajo con delta_vol > umbral superior => soporte
-    #              pivote alto con delta_vol < umbral inferior => resistencia
-    cond_sup = is_pl & (delta_vol > vol_hi)
-    cond_res = is_ph & (delta_vol < vol_lo)
+    # Filtros de no coincidencia con pivotes
+    if cond_missed_high.any():
+        target_idx = df.loc[cond_missed_high, 'prev_seg_max_idx'].dropna().astype(int)
+        target_vals = df.loc[cond_missed_high, 'prev_seg_max'].values
+        is_pivot = df.loc[target_idx, 'ph_big'].values | df.loc[target_idx, 'pl_big'].values
+        valid = ~is_pivot
+        df.loc[target_idx[valid], 'missed_high'] = target_vals[valid]
 
-    support_series.loc[cond_sup] = low[cond_sup]
-    resistance_series.loc[cond_res] = high[cond_res]
+    if cond_missed_low.any():
+        target_idx = df.loc[cond_missed_low, 'prev_seg_min_idx'].dropna().astype(int)
+        target_vals = df.loc[cond_missed_low, 'prev_seg_min'].values
+        is_pivot = df.loc[target_idx, 'ph_big'].values | df.loc[target_idx, 'pl_big'].values
+        valid = ~is_pivot
+        df.loc[target_idx[valid], 'missed_low'] = target_vals[valid]
 
-    # Rellenar hacia adelante para tener el nivel activo en cada vela
-    support_series = support_series.ffill()
-    resistance_series = resistance_series.ffill()
+    # Ghost level
+    last_missed = df['missed_high'].combine_first(df['missed_low'])
+    df['ghost_level'] = last_missed.ffill()
 
-    # Niveles ajustados por el ancho de la caja (para detectar rupturas)
-    sup_level_1 = support_series - width
-    res_level_1 = resistance_series + width
+    # ---------------------------------------------------------------------------
+    # 5. ChartPrime S/R
+    # ---------------------------------------------------------------------------
+    cond_sup = df['pl_big'] & (df['delta_vol'] > df['vol_hi'])
+    cond_res = df['ph_big'] & (df['delta_vol'] < df['vol_lo'])
 
-    # -------------------------------------------------------------------------
-    # 5. Eventos de ruptura/rechazo (ChartPrime) - Vectorizado
-    # -------------------------------------------------------------------------
-    # Convertir arrays a Series con el índice del DataFrame para usar shift()
-    low_s = pd.Series(low, index=df.index)
-    high_s = pd.Series(high, index=df.index)
-    close_s = pd.Series(close, index=df.index)
+    # Soporte y resistencia
+    df['sr_sup'] = np.nan
+    df['sr_res'] = np.nan
+    df.loc[cond_sup, 'sr_sup'] = df['low']
+    df.loc[cond_res, 'sr_res'] = df['high']
 
-    # Ruptura alcista de resistencia
-    breakout_res = (low_s > res_level_1) & (low_s.shift(1) <= res_level_1.shift(1))
-    # Rechazo en resistencia
-    res_holds = (high_s >= resistance_series) & (close_s < resistance_series)
-    # Sostenimiento en soporte
-    sup_holds = (low_s <= support_series) & (close_s > support_series)
-    # Ruptura bajista de soporte
-    breakout_sup = (high_s < sup_level_1) & (high_s.shift(1) >= sup_level_1.shift(1))
+    df['sr_sup'] = df['sr_sup'].ffill()
+    df['sr_res'] = df['sr_res'].ffill()
 
-    # -------------------------------------------------------------------------
-    # 6. Cambio de rol (Resistencia -> Soporte y viceversa)
-    # -------------------------------------------------------------------------
-    res_is_sup_arr = np.full(n, False)
-    sup_is_res_arr = np.full(n, False)
+    # Niveles
+    df['sup_level_1'] = df['sr_sup'] - df['width']
+    df['res_level_1'] = df['sr_res'] + df['width']
 
-    res_is_sup = False
-    sup_is_res = False
-    for i in range(n):
-        if breakout_res.iat[i]:
-            res_is_sup = True
-        elif res_holds.iat[i]:
-            res_is_sup = False
+    # Eventos de ruptura/rechazo
+    df['breakout_res'] = (df['low']  >  df['res_level_1']) & (df['low'].shift(1)  <= df['res_level_1'].shift(1))
+    df['res_holds']    = (df['high'] >= df['sr_res'])      & (df['close']         <  df['sr_res'])
+    df['sup_holds']    = (df['low']  <= df['sr_sup'])      & (df['close']         >  df['sr_sup'])
+    df['breakout_sup'] = (df['high'] <  df['sup_level_1']) & (df['high'].shift(1) >= df['sup_level_1'].shift(1))
 
-        if breakout_sup.iat[i]:
-            sup_is_res = True
-        elif sup_holds.iat[i]:
-            sup_is_res = False
+    # Cambio de rol
+    df['res_is_sup'] = (df['breakout_res'].astype(int) - df['res_holds'].astype(int)).cumsum().clip(0, 1).astype(bool)
+    df['sup_is_res'] = (df['breakout_sup'].astype(int) - df['sup_holds'].astype(int)).cumsum().clip(0, 1).astype(bool)
 
-        res_is_sup_arr[i] = res_is_sup
-        sup_is_res_arr[i] = sup_is_res
-
-    # -------------------------------------------------------------------------
-    # 7. Asignación final al DataFrame
-    # -------------------------------------------------------------------------
-    df['pivot_high'] = pivot_high
-    df['pivot_low'] = pivot_low
-    df['pivot_os'] = os_arr
-    df['ghost_level'] = ghost_level
-    df['missed_high'] = missed_high
-    df['missed_low'] = missed_low
-
-    df['sr_support'] = support_series.values
-    df['sr_resistance'] = resistance_series.values
-    df['breakout_res'] = breakout_res.values
-    df['res_holds'] = res_holds.values
-    df['sup_holds'] = sup_holds.values
-    df['breakout_sup'] = breakout_sup.values
-    df['res_is_sup'] = res_is_sup_arr
-    df['sup_is_res'] = sup_is_res_arr
+    # Limpieza
+    cols_to_drop = [
+        'delta_vol', 'vol_hi', 'vol_lo', 'atr', 'width',
+        'ph_big', 'pl_big', 'ph_small', 'pl_small', 'pivot_big_event', 'segment_id',
+        'high_max_seg', 'low_min_seg', 'idx', 'high_max_idx', 'low_min_idx',
+        'prev_seg_max', 'prev_seg_min', 'prev_seg_max_idx', 'prev_seg_min_idx',
+        'sup_level_1', 'res_level_1'
+    ]
+    df.drop(columns=[c for c in cols_to_drop if c in df.columns], inplace=True)
 
     return df
+
+def fibonacci(last_swing_high_val, last_swing_low_val,
+              lvl = 0.618, high = False, low = False):
+    """Cálculo de niveles Fibo en el pullback"""
+    diff = last_swing_high_val - last_swing_low_val
+    price = last_swing_high_val - (diff * lvl)
+    return high > price if high else low > price
