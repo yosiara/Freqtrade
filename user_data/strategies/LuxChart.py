@@ -37,7 +37,7 @@ from custom_indicators import pivot_sr_volume
 
 
 class LuxChart(IStrategy):
-    timeframe = "15m"
+    timeframe = "5m"
 
     # can_short = True
 
@@ -62,35 +62,39 @@ class LuxChart(IStrategy):
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe.loc[
             (
-                (dataframe['close'] > dataframe['ghost_level'])     # Ruptura del ghost lvl
-                & (dataframe['close'] > dataframe['open'])          # Vela alcista
-                & (dataframe['pivot_os'] == 0)                      # Pivote bajo confirmado
+                (dataframe['breakout_res'])   # Ruptura de resistencia
+                | (dataframe['sup_holds'])    # Soporte confirmado
+            ) &
+            (
+                (dataframe['pivot_os'] == 1)  # Último pivote fue alto (tendencia alcista)
+                & (dataframe['volume'] > 0)   # Confirmar volumen siempre
             ),
-            "enter_long",
-        ] = 1
+        'entry_long'] = 1
 
         dataframe.loc[
             (
-                (dataframe['close'] < dataframe['ghost_level'])     # Ruptura del ghost lvl
-                & (dataframe['close'] < dataframe['open'])          # Vela bajista
-                & (dataframe['pivot_os'] == 1)                      # Pivote alto confirmado
+                (dataframe['breakout_sup'])   # Ruptura de soporte
+                | (dataframe['res_holds'])    # Resistencia confirmada
+            ) &
+            (
+                (dataframe['pivot_os'] == 0)  # Último pivote fue bajo (tendencia bajista)
+                & (dataframe['volume'] > 0)   # Confirmar volumen siempre
             ),
-            "enter_short",
-        ] = 1
+        'entry_short'] = 1
+
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe.loc[
             (
-                dataframe["close"] < dataframe["sr_res"] * (1 - 0.002)    # Resistencia próxima
+                dataframe["close"] < dataframe["sr_res"] * (1 - 0.002)   # Resistencia próxima
             ),
-            "exit_long",
-        ] = 1
+        "exit_long"] = 1
 
         dataframe.loc[
             (
-                dataframe["close"] > dataframe["sr_sup"] * (1 + 0.002)    # Soporte próximo
+                dataframe["close"] > dataframe["sr_sup"] * (1 + 0.002)   # Soporte próximo
             ),
-            "exit_short",
-        ] = 1
+        "exit_short"] = 1
+
         return dataframe

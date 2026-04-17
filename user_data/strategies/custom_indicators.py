@@ -146,8 +146,8 @@ def pivot_sr_volume(
     # ---------------------------------------------------------------------------
     # 5. ChartPrime S/R
     # ---------------------------------------------------------------------------
-    cond_sup = df['pl_big'] & (df['delta_vol'] > df['vol_hi'])
-    cond_res = df['ph_big'] & (df['delta_vol'] < df['vol_lo'])
+    cond_sup = df['pl_big'] & (df['delta_vol'] > df['vol_hi']) # Support levels with Positive Volume
+    cond_res = df['ph_big'] & (df['delta_vol'] < df['vol_lo']) # Resistance levels with Negative Volume
 
     # Soporte y resistencia
     df['sr_sup'] = np.nan
@@ -158,15 +158,15 @@ def pivot_sr_volume(
     df['sr_sup'] = df['sr_sup'].ffill()
     df['sr_res'] = df['sr_res'].ffill()
 
-    # Niveles
+    # Niveles desplazados para simular caja según fuerza
     df['sup_level_1'] = df['sr_sup'] - df['width']
     df['res_level_1'] = df['sr_res'] + df['width']
 
     # Eventos de ruptura/rechazo
-    df['breakout_res'] = (df['low']  >  df['res_level_1']) & (df['low'].shift(1)  <= df['res_level_1'].shift(1))
-    df['res_holds']    = (df['high'] >= df['sr_res'])      & (df['close']         <  df['sr_res'])
-    df['sup_holds']    = (df['low']  <= df['sr_sup'])      & (df['close']         >  df['sr_sup'])
-    df['breakout_sup'] = (df['high'] <  df['sup_level_1']) & (df['high'].shift(1) >= df['sup_level_1'].shift(1))
+    df['breakout_res'] = (df['low'] > df['res_level_1']) & (df['low'].shift(1) <= df['res_level_1'].shift(1))
+    df['res_holds'] = (df['high'] >= df['sr_res']) & (df['close'] < df['sr_res'])
+    df['sup_holds'] = (df['low']  <= df['sr_sup']) & (df['close'] > df['sr_sup'])
+    df['breakout_sup'] = (df['high'] < df['sup_level_1']) & (df['high'].shift(1) >= df['sup_level_1'].shift(1))
 
     # Cambio de rol
     df['res_is_sup'] = (df['breakout_res'].astype(int) - df['res_holds'].astype(int)).cumsum().clip(0, 1).astype(bool)
@@ -176,7 +176,6 @@ def pivot_sr_volume(
     cols_to_drop = [
         'delta_vol', 'vol_hi', 'vol_lo', 'atr', 'width',
         'ph_big', 'pl_big', 'ph_small', 'pl_small', 'pivot_big_event', 'segment_id',
-        'high_max_seg', 'low_min_seg', 'idx', 'high_max_idx', 'low_min_idx',
         'prev_seg_max', 'prev_seg_min', 'prev_seg_max_idx', 'prev_seg_min_idx',
         'sup_level_1', 'res_level_1'
     ]
