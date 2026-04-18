@@ -50,6 +50,7 @@ def pivot_sr_volume(
         - sup_is_res    : Soporte previo actúa como resistencia (cambio de rol).
     """
     df = dataframe.copy()
+    small_length = pivot_length // 2
 
     # ---------------------------------------------------------------------------
     # 1. Volumen delta
@@ -61,8 +62,8 @@ def pivot_sr_volume(
     )
 
     # Umbrales móviles
-    df['vol_hi'] = df['delta_vol'].rolling(vol_len).max()
-    df['vol_lo'] = df['delta_vol'].rolling(vol_len).min()
+    df['vol_hi'] = (df['delta_vol'] / 2.5).rolling(vol_len).max()
+    df['vol_lo'] = (df['delta_vol'] / 2.5).rolling(vol_len).min()
 
     # ATR para el ancho de las zonas S/R
     df['atr'] = ta.ATR(df, timeperiod=200)
@@ -97,7 +98,7 @@ def pivot_sr_volume(
     df['pivot_low']  = np.where(df['pl_big'], df['low'], np.nan)
 
     # Pivotes secundarios (para missed points)
-    ph_small, pl_small = unique_pivots(df['high'], pivot_length // 2)
+    ph_small, pl_small = unique_pivots(df['high'], small_length)
     df['ph_small'] = ph_small
     df['pl_small'] = pl_small
 
@@ -146,8 +147,8 @@ def pivot_sr_volume(
     # ---------------------------------------------------------------------------
     # 5. ChartPrime S/R
     # ---------------------------------------------------------------------------
-    cond_sup = df['pl_big'] & (df['delta_vol'] > df['vol_hi']) # Support levels with Positive Volume
-    cond_res = df['ph_big'] & (df['delta_vol'] < df['vol_lo']) # Resistance levels with Negative Volume
+    cond_sup = df['pl_big'] & (df['delta_vol'] > df['vol_hi']) # Support lvl with Positive Volume
+    cond_res = df['ph_big'] & (df['delta_vol'] < df['vol_lo']) # Resistance lvl with Negative Volume
 
     # Soporte y resistencia
     df['sr_sup'] = np.nan
@@ -158,26 +159,68 @@ def pivot_sr_volume(
     df['sr_sup'] = df['sr_sup'].ffill()
     df['sr_res'] = df['sr_res'].ffill()
 
-    # Niveles desplazados para simular caja según fuerza
-    df['sup_level_1'] = df['sr_sup'] - df['width']
-    df['res_level_1'] = df['sr_res'] + df['width']
+    # Niveles de caja exteriores para S/R
+    df['res_level_1'] = df['sr_res'] + df['width']  # parte alta de la resistencia (ruptura alcista)
+    df['sup_level_1'] = df['sr_sup'] - df['width']  # parte baja del soporte (ruptura bajista)
 
-    # Eventos de ruptura/rechazo
-    df['breakout_res'] = (df['low'] > df['res_level_1']) & (df['low'].shift(1) <= df['res_level_1'].shift(1))
-    df['res_holds'] = (df['high'] >= df['sr_res']) & (df['close'] < df['sr_res'])
-    df['sup_holds'] = (df['low']  <= df['sr_sup']) & (df['close'] > df['sr_sup'])
-    df['breakout_sup'] = (df['high'] < df['sup_level_1']) & (df['high'].shift(1) >= df['sup_level_1'].shift(1))
+    # Niveles de caja interiores para S/R
+    df['res_level_2'] = df['sr_res'] - df['width']  # parte baja de la resistencia (ruptura bajista en retest)
+    df['sup_level_2'] = df['sr_sup'] + df['width']  # parte alta del soporte (ruptura alcista en retest)
 
-    # Cambio de rol
-    df['res_is_sup'] = (df['breakout_res'].astype(int) - df['res_holds'].astype(int)).cumsum().clip(0, 1).astype(bool)
-    df['sup_is_res'] = (df['breakout_sup'].astype(int) - df['sup_holds'].astype(int)).cumsum().clip(0, 1).astype(bool)
+    # Valores de vela desplazados
+    prev_high = df["high"].shift(1)
+    prev_low  = df["low"].shift(1)
+    prev_sr_res = df["sr_res"].shift(1)
+    prev_sr_sup = df["sr_sup"].shift(1)
+    prev_close = df['close'].shift(1)
+    prev_open = df['open'].shift(1)
+
+    # Velas verdes y rojas
+    bullish_candle = (df["close"] > df["open"])
+    bearish_candle = (df["close"] < df["open"])
+
+    # Eventos de ruptura
+    def break_down(level: str) -> pd.Series:
+        condition = (
+            bearish_candle &
+            (df['high'] < df[level]) &
+            (prev_close < prev_open) &
+            (prev_high  >= df[level].shift(1))
+        )
+        return condition
+
+    def break_up(level: pd.Series) -> pd.Series:
+        condition = (
+            bullish_candle &
+            (df['low']  > df[level]) &
+            (prev_close > prev_open) &
+            (prev_low   <= df[level].shift(1))
+        )
+        return condition
+
+    df['breakout_res'] = break_up("res_level_1")
+    df['breakout_sup'] = break_down("sup_level_1")
+
+    # Retest failed
+    df['breakout_sup_up']   = break_up("sup_level_2")
+    df['breakout_res_down'] = break_down("res_level_2")
+
+    # Eventos de rechazo
+    df['res_holds'] = bearish_candle & (prev_high >= prev_sr_res) & (prev_close < prev_sr_res)
+    df['sup_holds'] = bullish_candle & (prev_low <= prev_sr_sup) & (prev_close > prev_sr_sup)
+
+    # Soporte convertido en RESISTENCIA
+    df['reverse_sup_holds'] = bearish_candle & (prev_high >= prev_sr_sup) & (prev_close < prev_sr_sup)
+
+    # Resistencia convertida en SOPORTE
+    df['reverse_res_holds'] = bullish_candle & (prev_low <= prev_sr_res) & (prev_close > prev_sr_res)
 
     # Limpieza
     cols_to_drop = [
         'delta_vol', 'vol_hi', 'vol_lo', 'atr', 'width',
         'ph_big', 'pl_big', 'ph_small', 'pl_small', 'pivot_big_event', 'segment_id',
         'prev_seg_max', 'prev_seg_min', 'prev_seg_max_idx', 'prev_seg_min_idx',
-        'sup_level_1', 'res_level_1'
+        # 'sup_level_1', 'res_level_1'
     ]
     df.drop(columns=[c for c in cols_to_drop if c in df.columns], inplace=True)
 

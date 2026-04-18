@@ -37,15 +37,15 @@ from custom_indicators import pivot_sr_volume
 
 
 class LuxChart(IStrategy):
-    timeframe = "5m"
+    timeframe = "15m"
 
     # can_short = True
 
     minimal_roi = {  # tiempo - beneficio -> cerrar
-        "0": 0.04,   # máximo, 4%
-        "120": 0.03, # tras 2h, 3%
-        "180": 0.02, # tras 3h, 2%
-        "240": 0,    # tras 4h, salir aunque sea break even
+        "0": 0.05,   # máximo, 5%
+        "180": 0.03, # tras 2h, 3%
+        "240": 0.02, # tras 3h, 2%
+        # "240": 0,    # tras 4h, salir aunque sea break even
     }
 
     stoploss = -0.02                         # -2% máximo inicial
@@ -62,38 +62,40 @@ class LuxChart(IStrategy):
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe.loc[
             (
-                (dataframe['breakout_res'])   # Ruptura de resistencia
-                | (dataframe['sup_holds'])    # Soporte confirmado
+                (dataframe['breakout_res'])         # Ruptura de resistencia
+                | (dataframe['sup_holds'])          # Soporte confirmado
+                | (dataframe["reverse_res_holds"])  # Resistencia ahora es SOPORTE confirmado (retest)
             ) &
             (
-                (dataframe['pivot_os'] == 1)  # Último pivote fue alto (tendencia alcista)
-                & (dataframe['volume'] > 0)   # Confirmar volumen siempre
+                # (dataframe['pivot_os'] == 1)      # Último pivote fue alto (tendencia alcista)
+                (dataframe['volume'] > 0)           # Confirmar volumen siempre
             ),
-        'entry_long'] = 1
+        'enter_long'] = 1
 
         dataframe.loc[
             (
-                (dataframe['breakout_sup'])   # Ruptura de soporte
-                | (dataframe['res_holds'])    # Resistencia confirmada
+                (dataframe['breakout_sup'])         # Ruptura de soporte
+                | (dataframe['res_holds'])          # Resistencia confirmada
+                | (dataframe["reverse_sup_holds"])  # Soporte ahora es RESISTENCIA confirmada (retest)
             ) &
             (
-                (dataframe['pivot_os'] == 0)  # Último pivote fue bajo (tendencia bajista)
-                & (dataframe['volume'] > 0)   # Confirmar volumen siempre
+                # (dataframe['pivot_os'] == 0)      # Último pivote fue bajo (tendencia bajista)
+                (dataframe['volume'] > 0)           # Confirmar volumen siempre
             ),
-        'entry_short'] = 1
+        'enter_short'] = 1
 
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe.loc[
             (
-                dataframe["close"] < dataframe["sr_res"] * (1 - 0.002)   # Resistencia próxima
+                dataframe['breakout_res_down']    # Retest failed
             ),
         "exit_long"] = 1
 
         dataframe.loc[
             (
-                dataframe["close"] > dataframe["sr_sup"] * (1 + 0.002)   # Soporte próximo
+                dataframe['breakout_sup_up']      # Retest failed
             ),
         "exit_short"] = 1
 
