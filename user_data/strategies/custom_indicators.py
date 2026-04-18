@@ -33,21 +33,23 @@ def pivot_sr_volume(
         -------------------------------
         - pivot_high   : Precio del pivote alto confirmado.
         - pivot_low    : Precio del pivote bajo confirmado.
-        - pivot_os     : Estado del último pivote (1=alto, 0=bajo, -1=inicial).
+        - pivot_os     : Estado del último pivote (1=alto, 0=bajo).
         - missed_high  : Precio donde se detectó un "missed pivot high".
         - missed_low   : Precio donde se detectó un "missed pivot low".
         - ghost_level  : Nivel fantasma horizontal actual (precio).
 
         ChartPrime (S/R con volumen)
         ----------------------------
-        - sr_sup        : Nivel de soporte activo (basado en pivote bajo + volumen).
-        - sr_res        : Nivel de resistencia activo (basado en pivote alto + volumen).
-        - breakout_res  : Ruptura alcista de resistencia.
-        - res_holds     : Resistencia rechaza el precio.
-        - sup_holds     : Soporte sostiene el precio.
-        - breakout_sup  : Ruptura bajista de soporte.
-        - res_is_sup    : Resistencia previa actúa como soporte (cambio de rol).
-        - sup_is_res    : Soporte previo actúa como resistencia (cambio de rol).
+        - sr_res             : Nivel de resistencia activo (basado en pivote alto + volumen).
+        - sr_sup             : Nivel de soporte activo (basado en pivote bajo + volumen).
+        - breakout_res       : Ruptura alcista de resistencia.
+        - breakout_res_down  : Ruptura bajista de la resistencia (retest).
+        - breakout_sup       : Ruptura bajista de soporte.
+        - breakout_sup_up    : Ruptura alcista del soporte (retest).
+        - res_holds          : Resistencia rechaza el precio.
+        - reverse_res_holds  : Resistencia convertida en soporte sostiene el precio (retest).
+        - sup_holds          : Soporte sostiene el precio.
+        - reverse_sup_holds  : Soporte convertido en resistencia sostiene el precio (retest).
     """
     df = dataframe.copy()
     small_length = pivot_length // 2
@@ -89,10 +91,10 @@ def pivot_sr_volume(
     df['pl_big'] = pl_big
 
     # Estado
-    df['pivot_os'] = -1
+    df['pivot_os'] = np.nan
     df.loc[df['ph_big'], 'pivot_os'] = 1
     df.loc[df['pl_big'], 'pivot_os'] = 0
-    df['pivot_os'] = df['pivot_os'].replace(-1, np.nan).ffill().fillna(0).astype(int)
+    df['pivot_os'] = df['pivot_os'].ffill()
 
     df['pivot_high'] = np.where(df['ph_big'], df['high'], np.nan)
     df['pivot_low']  = np.where(df['pl_big'], df['low'], np.nan)
@@ -150,7 +152,6 @@ def pivot_sr_volume(
     cond_sup = df['pl_big'] & (df['delta_vol'] > df['vol_hi']) # Support lvl with Positive Volume
     cond_res = df['ph_big'] & (df['delta_vol'] < df['vol_lo']) # Resistance lvl with Negative Volume
 
-    # Soporte y resistencia
     df['sr_sup'] = np.nan
     df['sr_res'] = np.nan
     df.loc[cond_sup, 'sr_sup'] = df['low']
@@ -167,7 +168,9 @@ def pivot_sr_volume(
     df['res_level_2'] = df['sr_res'] - df['width']  # parte baja de la resistencia (ruptura bajista en retest)
     df['sup_level_2'] = df['sr_sup'] + df['width']  # parte alta del soporte (ruptura alcista en retest)
 
-    # Valores de vela desplazados
+    # ---------------------------------------------------------------------------
+    # 6. Eventos y señales
+    # ---------------------------------------------------------------------------
     prev_high = df["high"].shift(1)
     prev_low  = df["low"].shift(1)
     prev_sr_res = df["sr_res"].shift(1)
@@ -180,7 +183,7 @@ def pivot_sr_volume(
     bearish_candle = (df["close"] < df["open"])
 
     # Eventos de ruptura
-    def break_down(level: str) -> pd.Series:
+    def break_down(level: str = "sup_level_1") -> pd.Series:
         condition = (
             bearish_candle &
             (df['high'] < df[level]) &
@@ -189,7 +192,7 @@ def pivot_sr_volume(
         )
         return condition
 
-    def break_up(level: pd.Series) -> pd.Series:
+    def break_up(level: str = "res_level_1") -> pd.Series:
         condition = (
             bullish_candle &
             (df['low']  > df[level]) &
@@ -198,8 +201,8 @@ def pivot_sr_volume(
         )
         return condition
 
-    df['breakout_res'] = break_up("res_level_1")
-    df['breakout_sup'] = break_down("sup_level_1")
+    df['breakout_res'] = break_up()
+    df['breakout_sup'] = break_down()
 
     # Retest failed
     df['breakout_sup_up']   = break_up("sup_level_2")
@@ -215,12 +218,14 @@ def pivot_sr_volume(
     # Resistencia convertida en SOPORTE
     df['reverse_res_holds'] = bullish_candle & (prev_low <= prev_sr_res) & (prev_close > prev_sr_res)
 
-    # Limpieza
+    # ---------------------------------------------------------------------------
+    # 7. Limpieza
+    # ---------------------------------------------------------------------------
     cols_to_drop = [
         'delta_vol', 'vol_hi', 'vol_lo', 'atr', 'width',
         'ph_big', 'pl_big', 'ph_small', 'pl_small', 'pivot_big_event', 'segment_id',
         'prev_seg_max', 'prev_seg_min', 'prev_seg_max_idx', 'prev_seg_min_idx',
-        # 'sup_level_1', 'res_level_1'
+        'missed_high', 'missed_low'
     ]
     df.drop(columns=[c for c in cols_to_drop if c in df.columns], inplace=True)
 
