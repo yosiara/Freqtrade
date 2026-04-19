@@ -160,21 +160,17 @@ def pivot_sr_volume(
     df['sr_sup'] = df['sr_sup'].ffill()
     df['sr_res'] = df['sr_res'].ffill()
 
-    # Niveles de caja exteriores para S/R
-    df['res_level_1'] = df['sr_res'] + df['width']  # parte alta de la resistencia (ruptura alcista)
-    df['sup_level_1'] = df['sr_sup'] - df['width']  # parte baja del soporte (ruptura bajista)
-
-    # Niveles de caja interiores para S/R
-    df['res_level_2'] = df['sr_res'] - df['width']  # parte baja de la resistencia (ruptura bajista en retest)
-    df['sup_level_2'] = df['sr_sup'] + df['width']  # parte alta del soporte (ruptura alcista en retest)
+    # Márgenes de la caja
+    df['res_lower'] = df['sr_res'] - df['width']
+    df['res_upper'] = df['sr_res'] + df['width']
+    df['sup_lower'] = df['sr_sup'] - df['width']
+    df['sup_upper'] = df['sr_sup'] + df['width']
 
     # ---------------------------------------------------------------------------
-    # 6. Eventos y señales
+    # 6. Eventos de ruptura
     # ---------------------------------------------------------------------------
     prev_high = df["high"].shift(1)
     prev_low  = df["low"].shift(1)
-    prev_sr_res = df["sr_res"].shift(1)
-    prev_sr_sup = df["sr_sup"].shift(1)
     prev_close = df['close'].shift(1)
     prev_open = df['open'].shift(1)
 
@@ -182,46 +178,75 @@ def pivot_sr_volume(
     bullish_candle = (df["close"] > df["open"])
     bearish_candle = (df["close"] < df["open"])
 
-    # Eventos de ruptura
-    def break_down(level: str = "sup_level_1") -> pd.Series:
+    def break_lower(level: str = "sup_lower") -> pd.Series:
         condition = (
             (df['high'] < df[level]) &
             (prev_high  >= df[level].shift(1))
         )
         return condition
 
-    def break_up(level: str = "res_level_1") -> pd.Series:
+    def break_upper(level: str = "res_upper") -> pd.Series:
         condition = (
-            (df['low']  > df[level]) &
-            (prev_low   <= df[level].shift(1))
+            (df['low'] > df[level]) &
+            (prev_low  <= df[level].shift(1))
         )
         return condition
 
-    df['breakout_res'] = break_up()
-    df['breakout_sup'] = break_down()
+    df["breakout_res"] = break_upper()
+    df["breakout_sup"] = break_lower()
 
-    # Retest failed
-    df['breakout_sup_up']   = break_up("sup_level_2")
-    df['breakout_res_down'] = break_down("res_level_2")
-
-    # Eventos de rechazo
-    df['res_holds'] = bearish_candle & (prev_high >= prev_sr_res) & (prev_close < prev_sr_res)
-    df['sup_holds'] = bullish_candle & (prev_low <= prev_sr_sup) & (prev_close > prev_sr_sup)
-
-    # Soporte convertido en RESISTENCIA
-    df['reverse_sup_holds'] = bearish_candle & (prev_high >= prev_sr_sup) & (prev_close < prev_sr_sup)
-
-    # Resistencia convertida en SOPORTE
-    df['reverse_res_holds'] = bullish_candle & (prev_low <= prev_sr_res) & (prev_close > prev_sr_res)
+    # Retest failed, exit
+    df['breakout_sup_upper'] = break_upper("sup_upper")
+    df['breakout_res_lower'] = break_lower("res_lower")
 
     # ---------------------------------------------------------------------------
-    # 7. Limpieza
+    # 7. Eventos de rechazo
+    # ---------------------------------------------------------------------------
+    # --- Cambios de rol ---
+    df['res_is_sup'] = False
+    df['sup_is_res'] = False
+    df.loc[df["breakout_res"], 'res_is_sup'] = True   # Resistencia -> Soporte
+    df.loc[df["breakout_sup"], 'sup_is_res'] = True   # Soporte -> Resistencia
+
+    # Invalidar cuando nuevo soporte creado
+    df.loc[df["pivot_os"] == 0, 'res_is_sup'] = False
+    # Invalidar cuando nueva resistencia creada
+    df.loc[df["pivot_os"] == 1, 'sup_is_res'] = False
+
+    df["res_is_sup"] = df["res_is_sup"].ffill()
+    df["sup_is_res"] = df["sup_is_res"].ffill()
+
+    df['res_active'] = np.where(df['sup_is_res'], df['sr_sup'], df['sr_res'])
+    df['sup_active'] = np.where(df['res_is_sup'], df['sr_res'], df['sr_sup'])
+
+    prev_res_active = df['res_active'].shift()
+    prev_sup_active = df['sup_active'].shift()
+
+    valid = ~df['res_is_sup']
+    if valid.any():
+        df['res_holds'] = (
+            bearish_candle &
+            (prev_high >= prev_res_active) &
+            (prev_close < prev_res_active)
+        )
+
+    valid = ~df["sup_is_res"]
+    if valid.any():
+        df['sup_holds'] = (
+            bullish_candle &
+            (prev_low <= prev_sup_active) &
+            (prev_close > prev_sup_active)
+        )
+
+    # ---------------------------------------------------------------------------
+    # 8. Limpieza
     # ---------------------------------------------------------------------------
     cols_to_drop = [
         'delta_vol', 'vol_hi', 'vol_lo', 'atr', 'width',
         'ph_big', 'pl_big', 'ph_small', 'pl_small', 'pivot_big_event', 'segment_id',
         'prev_seg_max', 'prev_seg_min', 'prev_seg_max_idx', 'prev_seg_min_idx',
-        'missed_high', 'missed_low'
+        'missed_high', 'missed_low', 'res_active', 'sup_active',
+        'sup_lower', 'sup_upper', 'res_lower', 'res_upper'
     ]
     df.drop(columns=[c for c in cols_to_drop if c in df.columns], inplace=True)
 

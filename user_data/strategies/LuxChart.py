@@ -64,7 +64,6 @@ class LuxChart(IStrategy):
             (
                 (dataframe['breakout_res'])         # Ruptura de resistencia
                 | (dataframe['sup_holds'])          # Soporte confirmado
-                | (dataframe["reverse_res_holds"])  # Resistencia ahora es SOPORTE confirmado (retest)
             ) &
             (
                 # (dataframe['pivot_os'] == 1)      # Último pivote fue alto (tendencia alcista)
@@ -76,7 +75,6 @@ class LuxChart(IStrategy):
             (
                 (dataframe['breakout_sup'])         # Ruptura de soporte
                 | (dataframe['res_holds'])          # Resistencia confirmada
-                | (dataframe["reverse_sup_holds"])  # Soporte ahora es RESISTENCIA confirmada (retest)
             ) &
             (
                 # (dataframe['pivot_os'] == 0)      # Último pivote fue bajo (tendencia bajista)
@@ -89,13 +87,13 @@ class LuxChart(IStrategy):
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe.loc[
             (
-                dataframe['breakout_res_down']    # Retest failed
+                dataframe['breakout_res_lower']     # Retest failed
             ),
         "exit_long"] = 1
 
         dataframe.loc[
             (
-                dataframe['breakout_sup_up']      # Retest failed
+                dataframe['breakout_sup_upper']     # Retest failed
             ),
         "exit_short"] = 1
 
