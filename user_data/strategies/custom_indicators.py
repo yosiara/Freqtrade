@@ -185,18 +185,14 @@ def pivot_sr_volume(
     # Eventos de ruptura
     def break_down(level: str = "sup_level_1") -> pd.Series:
         condition = (
-            bearish_candle &
             (df['high'] < df[level]) &
-            (prev_close < prev_open) &
             (prev_high  >= df[level].shift(1))
         )
         return condition
 
     def break_up(level: str = "res_level_1") -> pd.Series:
         condition = (
-            bullish_candle &
             (df['low']  > df[level]) &
-            (prev_close > prev_open) &
             (prev_low   <= df[level].shift(1))
         )
         return condition
