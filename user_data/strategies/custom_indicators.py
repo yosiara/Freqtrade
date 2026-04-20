@@ -36,20 +36,25 @@ def pivot_sr_volume(
         - pivot_os     : Estado del último pivote (1=alto, 0=bajo).
         - missed_high  : Precio donde se detectó un "missed pivot high".
         - missed_low   : Precio donde se detectó un "missed pivot low".
-        - ghost_level  : Nivel fantasma horizontal actual (precio).
+        - ghost_level  : Precio del nivel fantasma horizontal actual.
 
         ChartPrime (S/R con volumen)
         ----------------------------
-        - sr_res             : Nivel de resistencia activo (basado en pivote alto + volumen).
-        - sr_sup             : Nivel de soporte activo (basado en pivote bajo + volumen).
+        - sr_res             : Precio del nivel de resistencia.
+        - sr_sup             : Precio del nivel de soporte.
         - breakout_res       : Ruptura alcista de resistencia.
-        - breakout_res_down  : Ruptura bajista de la resistencia (retest).
         - breakout_sup       : Ruptura bajista de soporte.
-        - breakout_sup_up    : Ruptura alcista del soporte (retest).
         - res_holds          : Resistencia rechaza el precio.
-        - reverse_res_holds  : Resistencia convertida en soporte sostiene el precio (retest).
         - sup_holds          : Soporte sostiene el precio.
-        - reverse_sup_holds  : Soporte convertido en resistencia sostiene el precio (retest).
+        - sup_is_res         : Soporte convertido en resistencia.
+        - res_is_sup         : Resistencia convertida en soporte.
+
+        Salidas y Protecciones
+        ----------------------
+        - breakout_res_lower   : Ruptura bajista de la resistencia en retest (salir).
+        - breakout_res_upper   : Ruptura alcista del soporte en retest (salir).
+        - retest_failed_lower  : Estado de ruptura bajista de la resistencia en retest (no operar).
+        - retest_failed_upper  : Estado de ruptura alcista del soporte en retest (no operar).
     """
     df = dataframe.copy()
     small_length = pivot_length // 2
@@ -160,23 +165,21 @@ def pivot_sr_volume(
     df['sr_sup'] = df['sr_sup'].ffill()
     df['sr_res'] = df['sr_res'].ffill()
 
-    # Márgenes de la caja
-    df['res_lower'] = df['sr_res'] - df['width']
-    df['res_upper'] = df['sr_res'] + df['width']
-    df['sup_lower'] = df['sr_sup'] - df['width']
-    df['sup_upper'] = df['sr_sup'] + df['width']
+    # Márgenes exteriores de la caja
+    df['res_upper'] = df['sr_res'] + df['width']  # parte alta de la resistencia
+    df['sup_lower'] = df['sr_sup'] - df['width']  # parte baja del soporte
 
     # ---------------------------------------------------------------------------
     # 6. Eventos de ruptura
     # ---------------------------------------------------------------------------
-    prev_high = df["high"].shift(1)
-    prev_low  = df["low"].shift(1)
+    prev_high = df['high'].shift(1)
+    prev_low  = df['low'].shift(1)
     prev_close = df['close'].shift(1)
     prev_open = df['open'].shift(1)
 
     # Velas verdes y rojas
-    bullish_candle = (df["close"] > df["open"])
-    bearish_candle = (df["close"] < df["open"])
+    bullish_candle = (df['close'] > df['open'])
+    bearish_candle = (df['close'] < df['open'])
 
     def break_lower(level: str = "sup_lower") -> pd.Series:
         condition = (
@@ -192,54 +195,80 @@ def pivot_sr_volume(
         )
         return condition
 
-    df["breakout_res"] = break_upper()
-    df["breakout_sup"] = break_lower()
-
-    # Retest failed, exit
-    df['breakout_sup_upper'] = break_upper("sup_upper")
-    df['breakout_res_lower'] = break_lower("res_lower")
+    df['breakout_res'] = break_upper()
+    df['breakout_sup'] = break_lower()
 
     # ---------------------------------------------------------------------------
-    # 7. Eventos de rechazo
+    # 7. Cambios de rol
     # ---------------------------------------------------------------------------
-    # --- Cambios de rol ---
-    df['res_is_sup'] = False
-    df['sup_is_res'] = False
-    df.loc[df["breakout_res"], 'res_is_sup'] = True   # Resistencia -> Soporte
-    df.loc[df["breakout_sup"], 'sup_is_res'] = True   # Soporte -> Resistencia
+    df['res_is_sup'] = pd.Series(dtype=bool)
+    df['sup_is_res'] = pd.Series(dtype=bool)
+
+    df.loc[df['breakout_res'], 'res_is_sup'] = True   # Resistencia -> Soporte
+    df.loc[df['breakout_sup'], 'sup_is_res'] = True   # Soporte -> Resistencia
 
     # Invalidar cuando nuevo soporte creado
-    df.loc[df["pivot_os"] == 0, 'res_is_sup'] = False
+    new_sup = (df['sr_sup'] != df['sr_sup'].shift(1))
+    df.loc[new_sup, 'res_is_sup'] = False
     # Invalidar cuando nueva resistencia creada
-    df.loc[df["pivot_os"] == 1, 'sup_is_res'] = False
+    new_res = (df['sr_res'] != df['sr_res'].shift(1))
+    df.loc[new_res, 'sup_is_res'] = False
 
-    df["res_is_sup"] = df["res_is_sup"].ffill()
-    df["sup_is_res"] = df["sup_is_res"].ffill()
+    df['res_is_sup'] = df['res_is_sup'].ffill()
+    df['sup_is_res'] = df['sup_is_res'].ffill()
 
-    df['res_active'] = np.where(df['sup_is_res'], df['sr_sup'], df['sr_res'])
-    df['sup_active'] = np.where(df['res_is_sup'], df['sr_res'], df['sr_sup'])
+    # ---------------------------------------------------------------------------
+    # 8. Eventos de rechazo
+    # ---------------------------------------------------------------------------
+    df['res_active'] = np.where(df['sup_is_res'], df['sr_sup'].where(df['breakout_sup']), df['sr_res'])
+    df['sup_active'] = np.where(df['res_is_sup'], df['sr_res'].where(df['breakout_res']), df['sr_sup'])
+
+    # Márgenes interiores de la caja
+    df['res_lower'] = df['res_active'] - df['width']  # parte baja de la resistencia
+    df['sup_upper'] = df['sup_active'] + df['width']  # parte alta del soporte
 
     prev_res_active = df['res_active'].shift()
     prev_sup_active = df['sup_active'].shift()
 
-    valid = ~df['res_is_sup']
-    if valid.any():
-        df['res_holds'] = (
-            bearish_candle &
-            (prev_high >= prev_res_active) &
-            (prev_close < prev_res_active)
-        )
+    # Rechazo en resistencia
+    not_flipped_sup = ~df['res_is_sup']
+    df.loc[not_flipped_sup, 'res_holds'] = (
+        bearish_candle[not_flipped_sup] &
+        (prev_high[not_flipped_sup] >= prev_res_active[not_flipped_sup]) &
+        (prev_close[not_flipped_sup] < prev_res_active[not_flipped_sup])
+    )
 
-    valid = ~df["sup_is_res"]
-    if valid.any():
-        df['sup_holds'] = (
-            bullish_candle &
-            (prev_low <= prev_sup_active) &
-            (prev_close > prev_sup_active)
-        )
+    # Rechazo en soporte
+    not_flipped_res = ~df['sup_is_res']
+    df.loc[not_flipped_res, 'sup_holds'] = (
+        bullish_candle[not_flipped_res] &
+        (prev_low[not_flipped_res] <= prev_sup_active[not_flipped_res]) &
+        (prev_close[not_flipped_res] > prev_sup_active[not_flipped_res])
+    )
 
     # ---------------------------------------------------------------------------
-    # 8. Limpieza
+    # 9. Protecciones
+    # ---------------------------------------------------------------------------
+    df['breakout_res_lower'] = break_lower("res_lower")
+    df['breakout_sup_upper'] = break_upper("sup_upper")
+
+    df['retest_failed_lower'] = pd.Series(dtype=bool)
+    df['retest_failed_upper'] = pd.Series(dtype=bool)
+
+    # Fallo de rebote en retesteo, esperar...
+    df.loc[(df['breakout_res_lower'] & df['res_is_sup']), 'retest_failed_lower'] = True
+    df.loc[(df['breakout_sup_upper'] & df['sup_is_res']), 'retest_failed_upper'] = True
+
+    # Invalidar cuando nuevo soporte creado
+    df.loc[new_sup, 'retest_failed_lower'] = False
+    # Invalidar cuando nueva resistencia creada
+    df.loc[new_res, 'retest_failed_upper'] = False
+
+    df['retest_failed_lower'] = df['retest_failed_lower'].ffill()
+    df['retest_failed_upper'] = df['retest_failed_upper'].ffill()
+
+    # ---------------------------------------------------------------------------
+    # 10. Limpieza
     # ---------------------------------------------------------------------------
     cols_to_drop = [
         'delta_vol', 'vol_hi', 'vol_lo', 'atr', 'width',

@@ -62,23 +62,23 @@ class LuxChart(IStrategy):
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe.loc[
             (
-                (dataframe['breakout_res'])         # Ruptura de resistencia
-                | (dataframe['sup_holds'])          # Soporte confirmado
+                dataframe['breakout_res']           # Ruptura de resistencia
+                | dataframe['sup_holds']            # Soporte confirmado
             ) &
             (
-                # (dataframe['pivot_os'] == 1)      # Último pivote fue alto (tendencia alcista)
-                (dataframe['volume'] > 0)           # Confirmar volumen siempre
+                ~dataframe['retest_failed_lower']   # Evitar entrar en soporte comprometido
+                & (dataframe['volume'] > 0)         # Confirmar volumen siempre
             ),
         'enter_long'] = 1
 
         dataframe.loc[
             (
-                (dataframe['breakout_sup'])         # Ruptura de soporte
-                | (dataframe['res_holds'])          # Resistencia confirmada
+                dataframe['breakout_sup']           # Ruptura de soporte
+                | dataframe['res_holds']            # Resistencia confirmada
             ) &
             (
-                # (dataframe['pivot_os'] == 0)      # Último pivote fue bajo (tendencia bajista)
-                (dataframe['volume'] > 0)           # Confirmar volumen siempre
+                ~dataframe['retest_failed_upper']   # Evitar entrar en resistencia comprometida
+                & (dataframe['volume'] > 0)         # Confirmar volumen siempre
             ),
         'enter_short'] = 1
 
