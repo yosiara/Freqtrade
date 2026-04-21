@@ -272,8 +272,8 @@ def pivot_sr_volume(
     df['breakout_res_active'] = first_breakout("breakout_res_active", "group_res")
     df['breakout_sup_active'] = first_breakout("breakout_sup_active", "group_sup")
 
-    df['retest_failed_res'] = pd.Series(dtype=bool)
-    df['retest_failed_sup'] = pd.Series(dtype=bool)
+    df['retest_failed_res'] = pd.Series(dtype='boolean')
+    df['retest_failed_sup'] = pd.Series(dtype='boolean')
 
     # Fallo de rebote en retesteo
     df.loc[(df['breakout_res_active'] & ~valid_sup), 'retest_failed_res'] = True
