@@ -40,21 +40,21 @@ def pivot_sr_volume(
 
         ChartPrime (S/R con volumen)
         ----------------------------
-        - sr_res             : Precio del nivel de resistencia.
-        - sr_sup             : Precio del nivel de soporte.
-        - breakout_res       : Ruptura alcista de resistencia.
-        - breakout_sup       : Ruptura bajista de soporte.
-        - res_holds          : Resistencia rechaza el precio.
-        - sup_holds          : Soporte sostiene el precio.
-        - sup_is_res         : Soporte convertido en resistencia.
-        - res_is_sup         : Resistencia convertida en soporte.
+        - sr_res        : Precio del nivel de resistencia.
+        - sr_sup        : Precio del nivel de soporte.
+        - breakout_res  : Ruptura alcista de resistencia.
+        - breakout_sup  : Ruptura bajista de soporte.
+        - res_holds     : Resistencia rechaza el precio.
+        - sup_holds     : Soporte sostiene el precio.
+        - sup_is_res    : Soporte convertido en resistencia.
+        - res_is_sup    : Resistencia convertida en soporte.
 
         Salidas y Protecciones
         ----------------------
-        - breakout_res_lower   : Ruptura bajista de la resistencia en retest (salir).
-        - breakout_res_upper   : Ruptura alcista del soporte en retest (salir).
-        - retest_failed_lower  : Estado de ruptura bajista de la resistencia en retest (no operar).
-        - retest_failed_upper  : Estado de ruptura alcista del soporte en retest (no operar).
+        - breakout_res_active  : Ruptura alcista de resistencia activa (retest).
+        - breakout_sup_active  : Ruptura bajista de soporte activo (retest).
+        - retest_failed_res    : Estado de ruptura alcista de resistencia activa (retest).
+        - retest_failed_sup    : Estado de ruptura bajista del soporte activo (retest).
     """
     df = dataframe.copy()
     small_length = pivot_length // 2
@@ -169,6 +169,15 @@ def pivot_sr_volume(
     df['res_upper'] = df['sr_res'] + df['width']  # parte alta de la resistencia
     df['sup_lower'] = df['sr_sup'] - df['width']  # parte baja del soporte
 
+    # Crear identificadores únicos para cada nivel de resistencia y soporte
+    df['res_id'] = np.nan
+    df.loc[cond_res, 'res_id'] = 'RES_' + df.loc[cond_res].index.astype(str)
+    df['res_id'] = df['res_id'].ffill()
+
+    df['sup_id'] = np.nan
+    df.loc[cond_sup, 'sup_id'] = 'SUP_' + df.loc[cond_sup].index.astype(str)
+    df['sup_id'] = df['sup_id'].ffill()
+
     # ---------------------------------------------------------------------------
     # 6. Eventos de ruptura
     # ---------------------------------------------------------------------------
@@ -181,22 +190,30 @@ def pivot_sr_volume(
     bullish_candle = (df['close'] > df['open'])
     bearish_candle = (df['close'] < df['open'])
 
-    def break_lower(level: str = "sup_lower") -> pd.Series:
-        condition = (
-            (df['high'] < df[level]) &
-            (prev_high  >= df[level].shift(1))
-        )
-        return condition
-
-    def break_upper(level: str = "res_upper") -> pd.Series:
+    def breakout_res(level: str = "res_upper") -> pd.Series:
         condition = (
             (df['low'] > df[level]) &
             (prev_low  <= df[level].shift(1))
         )
         return condition
 
-    df['breakout_res'] = break_upper()
-    df['breakout_sup'] = break_lower()
+    def breakout_sup(level: str = "sup_lower") -> pd.Series:
+        condition = (
+            (df['high'] < df[level]) &
+            (prev_high  >= df[level].shift(1))
+        )
+        return condition
+
+    # Solo primer breakouts por nivel, se desea restablecer cuando nueva aparición de S/R
+    def first_occurrence_only(breakout_col, level_id_col):
+        cum_breaks = df.groupby(level_id_col, dropna=True)[breakout_col].cumsum()
+        return df[breakout_col] & (cum_breaks == 1)
+
+    df['breakout_res'] = breakout_res()
+    df['breakout_sup'] = breakout_sup()
+
+    df['breakout_res'] = first_occurrence_only("breakout_res", "res_id")
+    df['breakout_sup'] = first_occurrence_only("breakout_sup", "sup_id")
 
     # ---------------------------------------------------------------------------
     # 7. Cambios de rol
@@ -217,55 +234,55 @@ def pivot_sr_volume(
     df['res_is_sup'] = df['res_is_sup'].ffill()
     df['sup_is_res'] = df['sup_is_res'].ffill()
 
+    df['res_active'] = np.where(df['sup_is_res'], df['sr_sup'].where(df['breakout_sup']).ffill(), df['sr_res'])
+    df['sup_active'] = np.where(df['res_is_sup'], df['sr_res'].where(df['breakout_res']).ffill(), df['sr_sup'])
+
+    df['res_active_upper'] = df['res_active'] + df['width']  # parte alta de la resistencia activa
+    df['sup_active_lower'] = df['sup_active'] - df['width']  # parte baja del soporte activo
+
     # ---------------------------------------------------------------------------
     # 8. Eventos de rechazo
     # ---------------------------------------------------------------------------
-    df['res_active'] = np.where(df['sup_is_res'], df['sr_sup'].where(df['breakout_sup']), df['sr_res'])
-    df['sup_active'] = np.where(df['res_is_sup'], df['sr_res'].where(df['breakout_res']), df['sr_sup'])
-
-    # Márgenes interiores de la caja
-    df['res_lower'] = df['res_active'] - df['width']  # parte baja de la resistencia
-    df['sup_upper'] = df['sup_active'] + df['width']  # parte alta del soporte
-
-    prev_res_active = df['res_active'].shift()
-    prev_sup_active = df['sup_active'].shift()
+    prev_res_active = df['res_active'].shift(1)
+    prev_sup_active = df['sup_active'].shift(1)
 
     # Rechazo en resistencia
-    not_flipped_sup = ~df['res_is_sup']
-    df.loc[not_flipped_sup, 'res_holds'] = (
-        bearish_candle[not_flipped_sup] &
-        (prev_high[not_flipped_sup] >= prev_res_active[not_flipped_sup]) &
-        (prev_close[not_flipped_sup] < prev_res_active[not_flipped_sup])
+    valid_res = (df['sr_res'] != df['sup_active'])
+    df.loc[valid_res, 'res_holds'] = (
+        bearish_candle[valid_res] &
+        (prev_high[valid_res] >= prev_res_active[valid_res]) &
+        (prev_close[valid_res] < prev_res_active[valid_res])
     )
 
     # Rechazo en soporte
-    not_flipped_res = ~df['sup_is_res']
-    df.loc[not_flipped_res, 'sup_holds'] = (
-        bullish_candle[not_flipped_res] &
-        (prev_low[not_flipped_res] <= prev_sup_active[not_flipped_res]) &
-        (prev_close[not_flipped_res] > prev_sup_active[not_flipped_res])
+    valid_sup = (df['sr_sup'] != df['res_active'])
+    df.loc[valid_sup, 'sup_holds'] = (
+        bullish_candle[valid_sup] &
+        (prev_low[valid_sup] <= prev_sup_active[valid_sup]) &
+        (prev_close[valid_sup] > prev_sup_active[valid_sup])
     )
 
     # ---------------------------------------------------------------------------
     # 9. Protecciones
     # ---------------------------------------------------------------------------
-    df['breakout_res_lower'] = break_lower("res_lower")
-    df['breakout_sup_upper'] = break_upper("sup_upper")
+    df['breakout_res_active'] = breakout_res("res_active_upper")
+    df['breakout_sup_active'] = breakout_sup("sup_active_lower")
+    df['breakout_res_active'] = first_occurrence_only("breakout_res_active", "res_id")
+    df['breakout_sup_active'] = first_occurrence_only("breakout_sup_active", "sup_id")
 
-    df['retest_failed_lower'] = pd.Series(dtype=bool)
-    df['retest_failed_upper'] = pd.Series(dtype=bool)
+    df['retest_failed_res'] = pd.Series(dtype=bool)
+    df['retest_failed_sup'] = pd.Series(dtype=bool)
 
     # Fallo de rebote en retesteo, esperar...
-    df.loc[(df['breakout_res_lower'] & df['res_is_sup']), 'retest_failed_lower'] = True
-    df.loc[(df['breakout_sup_upper'] & df['sup_is_res']), 'retest_failed_upper'] = True
+    df.loc[(df['breakout_res_active'] & df['sup_is_res']), 'retest_failed_res'] = True
+    df.loc[(df['breakout_sup_active'] & df['res_is_sup']), 'retest_failed_sup'] = True
 
-    # Invalidar cuando nuevo soporte creado
-    df.loc[new_sup, 'retest_failed_lower'] = False
-    # Invalidar cuando nueva resistencia creada
-    df.loc[new_res, 'retest_failed_upper'] = False
+    # Invalidar cuando nuevo soporte o resistencia creado
+    df.loc[new_sup | new_res, 'retest_failed_sup'] = False
+    df.loc[new_res | new_sup, 'retest_failed_res'] = False
 
-    df['retest_failed_lower'] = df['retest_failed_lower'].ffill()
-    df['retest_failed_upper'] = df['retest_failed_upper'].ffill()
+    df['retest_failed_sup'] = df['retest_failed_sup'].ffill()
+    df['retest_failed_res'] = df['retest_failed_res'].ffill()
 
     # ---------------------------------------------------------------------------
     # 10. Limpieza
@@ -274,8 +291,9 @@ def pivot_sr_volume(
         'delta_vol', 'vol_hi', 'vol_lo', 'atr', 'width',
         'ph_big', 'pl_big', 'ph_small', 'pl_small', 'pivot_big_event', 'segment_id',
         'prev_seg_max', 'prev_seg_min', 'prev_seg_max_idx', 'prev_seg_min_idx',
-        'missed_high', 'missed_low', 'res_active', 'sup_active',
-        'sup_lower', 'sup_upper', 'res_lower', 'res_upper'
+        # 'missed_high', 'missed_low', 'res_active', 'sup_active',
+        'sup_lower', 'res_upper', 'sup_active_lower', 'res_active_upper',
+        'res_id', 'sup_id'
     ]
     df.drop(columns=[c for c in cols_to_drop if c in df.columns], inplace=True)
 
