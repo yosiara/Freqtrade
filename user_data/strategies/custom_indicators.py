@@ -81,7 +81,7 @@ def pivot_sr_volume(
     # ---------------------------------------------------------------------------
     # 2. Pivotes
     # ---------------------------------------------------------------------------
-    def unique_pivots(series, length):
+    def unique_pivots(series: pd.Series, length: int):
         half = length
         roll = series.rolling(window=2*half+1, center=True)
         max_vals = roll.max()
