@@ -217,17 +217,28 @@ def pivot_sr_volume(
     # ---------------------------------------------------------------------------
     df['res_active'] = np.nan
     df['sup_active'] = np.nan
+
+    # 1. Inicialización con niveles originales
     df.loc[new_res, 'res_active'] = df['sr_res']
     df.loc[new_sup, 'sup_active'] = df['sr_sup']
 
-    df.loc[df['breakout_sup'], 'res_active'] = df['sr_sup']
+    # 2. Ruptura de resistencia -> se convierte en soporte
     df.loc[df['breakout_res'], 'sup_active'] = df['sr_res']
+    # Al convertirse en soporte, la resistencia activa debe volver atrás
+    df.loc[df['breakout_res'], 'res_active'] = df['sr_res']
 
+    # 3. Ruptura de soporte -> se convierte en resistencia
+    df.loc[df['breakout_sup'], 'res_active'] = df['sr_sup']
+    # Al convertirse en resistencia, el soporte activo debe volver atrás
+    df.loc[df['breakout_sup'], 'sup_active'] = df['sr_sup']
+
+    # 4. Propagación hacia adelante
     df['res_active'] = df['res_active'].ffill()
     df['sup_active'] = df['sup_active'].ffill()
 
-    df['res_active_upper'] = df['res_active'] + df['width']  # parte alta de la resistencia activa
-    df['sup_active_lower'] = df['sup_active'] - df['width']  # parte baja del soporte activo
+    # 5. Márgenes de los niveles activos
+    df['res_active_upper'] = df['res_active'] + df['width']
+    df['sup_active_lower'] = df['sup_active'] - df['width']
 
     # ---------------------------------------------------------------------------
     # 8. Eventos de rechazo
