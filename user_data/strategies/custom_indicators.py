@@ -34,8 +34,6 @@ def pivot_sr_volume(
         - pivot_high   : Precio del pivote alto confirmado.
         - pivot_low    : Precio del pivote bajo confirmado.
         - pivot_os     : Estado del último pivote (1=alto, 0=bajo).
-        - missed_high  : Precio donde se detectó un "missed pivot high".
-        - missed_low   : Precio donde se detectó un "missed pivot low".
         - ghost_level  : Precio del nivel fantasma horizontal actual.
 
         ChartPrime (S/R con volumen)
@@ -46,10 +44,8 @@ def pivot_sr_volume(
         - breakout_sup  : Ruptura bajista de soporte.
         - res_holds     : Resistencia rechaza el precio.
         - sup_holds     : Soporte sostiene el precio.
-
-        --- Importante ---
-        Cuando ocurre ruptura de resistencia esta será valorada como soporte potencial y viceverza,
-        las señales serán en correspondencia a la nueva estructura creada.
+        - res_active    : Soporte puede convertirse en resistencia potencial.
+        - sup_active    : Resistencia puede convertirse en soporte potencial.
 
         Salidas y Protecciones
         ----------------------
@@ -59,16 +55,14 @@ def pivot_sr_volume(
         - retest_failed_sup    : Estado de ruptura bajista del soporte activo (retest).
     """
     df = dataframe.copy()
-    small_length = pivot_length // 2
 
     # ---------------------------------------------------------------------------
     # 1. Volumen delta
     # ---------------------------------------------------------------------------
-    # Volumen en velas alcistas menos volumen en velas bajistas
     df['delta_vol'] = np.where(
         df['close'] > df['open'], df['volume'],
         np.where(df['close'] < df['open'], -df['volume'], 0)
-    )
+    ) # Volumen en velas alcistas menos volumen en velas bajistas
 
     # Umbrales móviles
     df['vol_hi'] = (df['delta_vol'] / 2.5).rolling(vol_len).max()
@@ -81,43 +75,39 @@ def pivot_sr_volume(
     # ---------------------------------------------------------------------------
     # 2. Pivotes
     # ---------------------------------------------------------------------------
-    def unique_pivots(series: pd.Series, length: int):
+    def pivot_high(series: pd.Series, length: int) -> pd.Series:
         half = length
-        roll = series.rolling(window=2*half+1, center=True)
+        roll = series.rolling(window=2 * half + 1, center=True)
         max_vals = roll.max()
-        min_vals = roll.min()
         is_max = (series == max_vals)
-        is_min = (series == min_vals)
         unique_max = roll.apply(lambda x: np.sum(x == x.max()) == 1, raw=True)
-        unique_min = roll.apply(lambda x: np.sum(x == x.min()) == 1, raw=True)
-        return is_max & unique_max, is_min & unique_min
+        return is_max & unique_max
 
-    # Pivotes primarios
-    ph_big, pl_big = unique_pivots(df['high'], pivot_length)
-    df['ph_big'] = ph_big
-    df['pl_big'] = pl_big
+    def pivot_low(series: pd.Series, length: int) -> pd.Series:
+        half = length
+        roll = series.rolling(window=2 * half + 1, center=True)
+        min_vals = roll.min()
+        is_min = (series == min_vals)
+        unique_min = roll.apply(lambda x: np.sum(x == x.min()) == 1, raw=True)
+        return is_min & unique_min
+
+    df['cond_ph'] = pivot_high(df['high'], pivot_length)
+    df['cond_pl'] = pivot_low(df['low'], pivot_length)
+    df['pivot_high'] = np.where(df['cond_ph'], df['high'], np.nan)
+    df['pivot_low']  = np.where(df['cond_pl'], df['low'], np.nan)
 
     # Estado
     df['pivot_os'] = np.nan
-    df.loc[df['ph_big'], 'pivot_os'] = 1
-    df.loc[df['pl_big'], 'pivot_os'] = 0
+    df.loc[df['cond_ph'], 'pivot_os'] = 1
+    df.loc[df['cond_pl'], 'pivot_os'] = 0
     df['pivot_os'] = df['pivot_os'].ffill()
 
-    df['pivot_high'] = np.where(df['ph_big'], df['high'], np.nan)
-    df['pivot_low']  = np.where(df['pl_big'], df['low'], np.nan)
-
-    # Pivotes secundarios (para missed points)
-    ph_small, pl_small = unique_pivots(df['high'], small_length)
-    df['ph_small'] = ph_small
-    df['pl_small'] = pl_small
-
     # ---------------------------------------------------------------------------
-    # 3. Segmentación
+    # 3. Missed Levels
     # ---------------------------------------------------------------------------
-    df['pivot_big_event'] = df['ph_big'] | df['pl_big']
-    df['segment_id'] = df['pivot_big_event'].cumsum()
+    df['segment_id'] = (df['cond_ph'] | df['cond_pl']).cumsum()
 
-    # Desplazamos los extremos del segmento anterior a la barra del nuevo pivote grande
+    # Desplazamos los extremos del segmento anterior a la barra del nuevo pivote
     df['prev_seg_max'] = df.groupby('segment_id')['high'].transform('max').shift(1)
     df['prev_seg_min'] = df.groupby('segment_id')['low'].transform('min').shift(1)
 
@@ -125,27 +115,24 @@ def pivot_sr_volume(
     df['prev_seg_max_idx'] = df.groupby('segment_id')['high'].transform('idxmax').shift(1)
     df['prev_seg_min_idx'] = df.groupby('segment_id')['low'].transform('idxmin').shift(1)
 
-    # ---------------------------------------------------------------------------
-    # 4. Missed Levels
-    # ---------------------------------------------------------------------------
-    cond_missed_high = df['pl_big'] & (df['prev_seg_max'] > df['low'])
-    cond_missed_low  = df['ph_big'] & (df['prev_seg_min'] < df['high'])
+    cond_missed_hi = df['cond_pl'] & (df['prev_seg_max'] > df['low'])
+    cond_missed_lo = df['cond_ph'] & (df['prev_seg_min'] < df['high'])
 
     df['missed_high'] = np.nan
     df['missed_low']  = np.nan
 
     # Filtros de no coincidencia con pivotes
-    if cond_missed_high.any():
-        target_idx = df.loc[cond_missed_high, 'prev_seg_max_idx'].dropna().astype(int)
-        target_vals = df.loc[cond_missed_high, 'prev_seg_max'].values
-        is_pivot = df.loc[target_idx, 'ph_big'].values | df.loc[target_idx, 'pl_big'].values
+    if cond_missed_hi.any():
+        target_idx = df.loc[cond_missed_hi, 'prev_seg_max_idx'].dropna().astype(int)
+        target_vals = df.loc[cond_missed_hi, 'prev_seg_max'].values
+        is_pivot = df.loc[target_idx, 'cond_ph'].values | df.loc[target_idx, 'cond_pl'].values
         valid = ~is_pivot
         df.loc[target_idx[valid], 'missed_high'] = target_vals[valid]
 
-    if cond_missed_low.any():
-        target_idx = df.loc[cond_missed_low, 'prev_seg_min_idx'].dropna().astype(int)
-        target_vals = df.loc[cond_missed_low, 'prev_seg_min'].values
-        is_pivot = df.loc[target_idx, 'ph_big'].values | df.loc[target_idx, 'pl_big'].values
+    if cond_missed_lo.any():
+        target_idx = df.loc[cond_missed_lo, 'prev_seg_min_idx'].dropna().astype(int)
+        target_vals = df.loc[cond_missed_lo, 'prev_seg_min'].values
+        is_pivot = df.loc[target_idx, 'cond_ph'].values | df.loc[target_idx, 'cond_pl'].values
         valid = ~is_pivot
         df.loc[target_idx[valid], 'missed_low'] = target_vals[valid]
 
@@ -154,18 +141,18 @@ def pivot_sr_volume(
     df['ghost_level'] = last_missed.ffill()
 
     # ---------------------------------------------------------------------------
-    # 5. ChartPrime S/R
+    # 4. ChartPrime S/R
     # ---------------------------------------------------------------------------
-    cond_sup = df['pl_big'] & (df['delta_vol'] > df['vol_hi']) # Support lvl with Positive Volume
-    cond_res = df['ph_big'] & (df['delta_vol'] < df['vol_lo']) # Resistance lvl with Negative Volume
+    cond_res = df['cond_ph'] & (df['delta_vol'] < df['vol_lo']) # Resistance lvl with Negative Volume
+    cond_sup = df['cond_pl'] & (df['delta_vol'] > df['vol_hi']) # Support lvl with Positive Volume
 
-    df['sr_sup'] = np.nan
     df['sr_res'] = np.nan
-    df.loc[cond_sup, 'sr_sup'] = df['low']
+    df['sr_sup'] = np.nan
     df.loc[cond_res, 'sr_res'] = df['high']
+    df.loc[cond_sup, 'sr_sup'] = df['low']
 
-    df['sr_sup'] = df['sr_sup'].ffill()
     df['sr_res'] = df['sr_res'].ffill()
+    df['sr_sup'] = df['sr_sup'].ffill()
 
     # Márgenes exteriores de la caja
     df['res_upper'] = df['sr_res'] + df['width']  # parte alta de la resistencia
@@ -178,7 +165,7 @@ def pivot_sr_volume(
     df['sup_id'] = df['sup_id'].ffill()
 
     # -------------------------------------------------------------------------
-    # 6. Variables y funciones auxiliares
+    # 5. Variables y funciones auxiliares
     # -------------------------------------------------------------------------
     prev_high = df['high'].shift(1)
     prev_low  = df['low'].shift(1)
@@ -212,7 +199,7 @@ def pivot_sr_volume(
         return df[breakout_col] & (cum_breaks == 1)
 
     # ---------------------------------------------------------------------------
-    # 7. Eventos de ruptura
+    # 6. Eventos de ruptura
     # ---------------------------------------------------------------------------
     df['cycle_res'] = new_res.cumsum()
     df['cycle_sup'] = new_sup.cumsum()
@@ -226,7 +213,7 @@ def pivot_sr_volume(
     df['breakout_sup'] = first_breakout("breakout_sup", "group_sup")
 
     # ---------------------------------------------------------------------------
-    # 8. Cambios de rol
+    # 7. Cambios de rol
     # ---------------------------------------------------------------------------
     df['res_active'] = np.nan
     df['sup_active'] = np.nan
@@ -243,7 +230,7 @@ def pivot_sr_volume(
     df['sup_active_lower'] = df['sup_active'] - df['width']  # parte baja del soporte activo
 
     # ---------------------------------------------------------------------------
-    # 9. Eventos de rechazo
+    # 8. Eventos de rechazo
     # ---------------------------------------------------------------------------
     prev_res_active = df['res_active'].shift(1)
     prev_sup_active = df['sup_active'].shift(1)
@@ -265,7 +252,7 @@ def pivot_sr_volume(
     )
 
     # ---------------------------------------------------------------------------
-    # 10. Protecciones
+    # 9. Protecciones
     # ---------------------------------------------------------------------------
     df['breakout_res_active'] = breakout_res("res_active_upper")
     df['breakout_sup_active'] = breakout_sup("sup_active_lower")
@@ -287,13 +274,13 @@ def pivot_sr_volume(
     df['retest_failed_res'] = df['retest_failed_res'].ffill()
 
     # ---------------------------------------------------------------------------
-    # 11. Limpieza
+    # 10. Limpieza
     # ---------------------------------------------------------------------------
     cols_to_drop = [
         'delta_vol', 'vol_hi', 'vol_lo', 'atr', 'width',
-        'ph_big', 'pl_big', 'ph_small', 'pl_small', 'pivot_big_event', 'segment_id',
+        'cond_ph', 'cond_pl', 'segment_id',
         'prev_seg_max', 'prev_seg_min', 'prev_seg_max_idx', 'prev_seg_min_idx',
-        # 'missed_high', 'missed_low',
+        'missed_high', 'missed_low',
         'sup_lower', 'res_upper', 'sup_active_lower', 'res_active_upper',
         'cycle_res', 'cycle_sup', 'group_res', 'group_sup'
     ]

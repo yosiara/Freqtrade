@@ -66,8 +66,8 @@ class LuxChart(IStrategy):
                 | dataframe['sup_holds']            # Soporte confirmado
             ) &
             (
-                # ~dataframe['retest_failed_sup']     # Evitar entrar en soporte comprometido
-                (dataframe['volume'] > 0)         # Confirmar volumen siempre
+                (dataframe['volume'] > 0)           # Confirmar volumen siempre
+                & ~dataframe['retest_failed_sup']   # Evitar entrar en soporte comprometido
             ),
         'enter_long'] = 1
 
@@ -77,8 +77,8 @@ class LuxChart(IStrategy):
                 | dataframe['res_holds']            # Resistencia confirmada
             ) &
             (
-                # ~dataframe['retest_failed_res']     # Evitar entrar en resistencia comprometida
-                (dataframe['volume'] > 0)         # Confirmar volumen siempre
+                (dataframe['volume'] > 0)           # Confirmar volumen siempre
+                & ~dataframe['retest_failed_res']   # Evitar entrar en resistencia comprometida
             ),
         'enter_short'] = 1
 
@@ -87,13 +87,13 @@ class LuxChart(IStrategy):
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe.loc[
             (
-                dataframe['breakout_sup_active']     # Retest failed
+                dataframe['breakout_sup_active']    # Retest failed
             ),
         "exit_long"] = 1
 
         dataframe.loc[
             (
-                dataframe['breakout_res_active']     # Retest failed
+                dataframe['breakout_res_active']    # Retest failed
             ),
         "exit_short"] = 1
 
