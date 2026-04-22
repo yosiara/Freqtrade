@@ -107,13 +107,13 @@ def pivot_sr_volume(
     # ---------------------------------------------------------------------------
     df['segment_id'] = (df['cond_ph'] | df['cond_pl']).cumsum()
 
-    # Desplazamos los extremos del segmento anterior a la barra del nuevo pivote
-    df['prev_seg_max'] = df.groupby('segment_id')['high'].transform('max').shift(1)
-    df['prev_seg_min'] = df.groupby('segment_id')['low'].transform('min').shift(1)
+    group_seg_hi = df.groupby('segment_id')['high']
+    group_seg_lo = df.groupby('segment_id')['low']
 
-    # índice donde ocurrió ese máximo anterior para colocar allí el missed level
-    df['prev_seg_max_idx'] = df.groupby('segment_id')['high'].transform('idxmax').shift(1)
-    df['prev_seg_min_idx'] = df.groupby('segment_id')['low'].transform('idxmin').shift(1)
+    df['prev_seg_max'] = group_seg_hi.transform('max').shift(1)
+    df['prev_seg_min'] = group_seg_lo.transform('min').shift(1)
+    df['prev_seg_max_idx'] = group_seg_hi.transform('idxmax').shift(1)
+    df['prev_seg_min_idx'] = group_seg_lo.transform('idxmin').shift(1)
 
     cond_missed_hi = df['cond_pl'] & (df['prev_seg_max'] > df['low'])
     cond_missed_lo = df['cond_ph'] & (df['prev_seg_min'] < df['high'])
