@@ -17,7 +17,9 @@
                 // Web server
                 "webserver"
             ],
-            "justMyCode": true
+            "justMyCode": true,
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/user_data/.env"
         }
     ]
 }
