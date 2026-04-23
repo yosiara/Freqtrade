@@ -1,3 +1,4 @@
 [submodule "user_data"]
 	path = user_data
 	url = https://github.com/yosiara/Freqtrade-Strategies.git
+	branch = develop
