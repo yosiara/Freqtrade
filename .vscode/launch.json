@@ -10,11 +10,6 @@
             "request": "launch",
             "module": "freqtrade",
             "args": [
-                // Backtesting
-                // "backtesting",
-                // "--strategy=LuxChart"
-
-                // Web server
                 "webserver"
             ],
             "justMyCode": true,
